@@ -1,0 +1,533 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import signal
+import select
+import fcntl
+import gtk
+import gobject
+import glib
+import pango
+import gettext
+import re
+import argparse
+import xattr
+import threading
+import time
+
+
+def act_quit():
+	gtk.main_quit()
+	return False
+
+def add_key_binding(widget, keyname, callback):
+	accelgroup = gtk.AccelGroup()
+	key, modifier = gtk.accelerator_parse(keyname)
+	accelgroup.connect_group(key, modifier, gtk.ACCEL_VISIBLE, callback)
+	widget.add_accel_group(accelgroup)
+
+def display_error(e):
+	text = None
+	if isinstance(e, OSError) or isinstance(e, IOError):
+		text = '%s (#%d)\n%s' % (e.strerror, e.errno, e.filename)
+	elif isinstance(e, Exception):
+		text = e.message
+	elif type(e) == type([]):
+		text = ''.join(e)
+	if text is None:
+		text = str(e)
+	dlg = gtk.MessageDialog(get_current_window(), gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, text)
+	dlg.set_title(_("Error"))
+	dlg.run()
+	dlg.destroy()
+
+def question(msg, stock_yes=None, parent=None):
+	dlg = gtk.MessageDialog(parent or get_current_window(), gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO)
+	dlg.set_markup(msg)
+	dlg.set_title(_("Question"))
+	if stock_yes is not None:
+		dlg.get_widget_for_response(gtk.RESPONSE_YES).hide()
+		btn_yes = StockButton(label=stock_yes[0], stock=stock_yes[1])
+		dlg.add_action_widget(btn_yes, gtk.RESPONSE_YES)
+		btn_yes.show()
+	resp = dlg.run()
+	dlg.destroy()
+	return (resp == gtk.RESPONSE_YES)
+
+def set_dialog_icon_name(dlg, icon):
+	img = dlg.get_content_area().children()[0].children()[0]
+	img.set_from_icon_name(icon, gtk.ICON_SIZE_DIALOG)
+
+def choose_dialog(action, filename=None):
+	global LastFolder
+	selected = None
+	
+	btn_accept_stock = gtk.STOCK_SAVE
+	if action == gtk.FILE_CHOOSER_ACTION_OPEN:
+		btn_accept_stock = gtk.STOCK_OPEN
+	dlg = gtk.FileChooserDialog(parent=get_current_window(), action=action, buttons=(gtk.STOCK_CANCEL, gtk.RESPONSE_REJECT, btn_accept_stock, gtk.RESPONSE_ACCEPT))
+	if LastFolder is not None: dlg.set_current_folder(LastFolder)
+	if filename is not None: dlg.set_current_name(filename)
+	btn_cwd = StockButton(label=_("Working Dir"), stock=gtk.STOCK_JUMP_TO)
+	dlg.add_action_widget(btn_cwd, gtk.RESPONSE_NO)
+	btn_cwd.show()
+	while True:
+		resp = dlg.run()
+		if resp == gtk.RESPONSE_ACCEPT:
+			selected = dlg.get_filename()
+			break
+		elif resp == gtk.RESPONSE_NO:
+			dlg.set_current_folder(os.getcwd())
+		else:
+			break
+	LastFolder = dlg.get_current_folder()
+	dlg.destroy()
+	return selected
+
+def choose_save_file(filename=None):
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SAVE, filename)
+
+def choose_save_folder():
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+
+def choose_open_file():
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN)
+
+
+def act_button(func):
+	if type(func) != type(()):
+		func = (func,)
+	if func[0] is not None:
+		func[0](*func[1:])
+
+def on_click_button(btn, func):
+	act_button(func)
+	return False
+
+class StockToolButton(gtk.ToolButton):
+	def __init__(self, label=None, stock=None, tooltip=None):
+		super(self.__class__, self).__init__()
+		if stock is not None:
+			if stock in gtk.stock_list_ids():
+				if stock is not None: self.set_stock_id(stock)
+			else:
+				self.set_icon_name(stock)
+		if label is not None:
+			self.set_label(label)
+		if tooltip is not None:
+			self.set_tooltip_text(tooltip)
+	def set_pixbuf(self, pxb):
+		a = self.get_children()[0]
+		a = a.get_children()[0]
+		img, a = a.get_children()
+		img.set_from_pixbuf(pxb)
+		img.props.visible = True
+	def __get_children(self):
+		align = self.get_children()[0]
+		hbox = align.get_children()[0]
+		return hbox.get_children()
+	def set_markup(self, markup):
+		x, lbl = self.__get_children()
+		lbl.set_markup(markup)
+
+class StockMenuItem(gtk.ImageMenuItem):
+	def __init__(self, label=None, stock_id=None, accel_group=None):
+		gtk.ImageMenuItem.__init__(self, stock_id, accel_group)
+		if label is not None:
+			self.set_label(label)
+
+def load_toolitems(toolbar, toolitems):
+	items = []
+	for label, stock, tip, fnc_left in toolitems:
+		hid = None
+		if type(fnc_left) == str:
+			tbi = gtk.SeparatorToolItem()
+			if fnc_left == 'space':
+				tbi.set_draw(False)
+				tbi.set_expand(True)
+			elif fnc_left == 'separator':
+				tbi.set_draw(True)
+				tbi.set_expand(False)
+		elif isinstance(stock, gtk.ToolItem):
+			tbi = stock
+			if tip is not None:
+				tbi.set_tooltip_text(_(tip))
+			hid = tbi.connect('clicked', on_click_button, fnc_left)
+		else:
+			Lstocklabel = None
+			st = gtk.stock_lookup(stock)
+			if st:
+				Lstocklabel = re.sub('_', '', st[1])
+			if label is not None:
+				Llabel = _(label)
+			else:
+				Llabel = Lstocklabel
+			if tip is not None:
+				Ltip = _(tip)
+			else:
+				if label is not None:
+					Ltip = Llabel
+				else:
+					Ltip = Lstocklabel
+			tbi = StockToolButton(label=Llabel, stock=stock, tooltip=Ltip)
+			tbi.set_data('stock', stock)
+			tbi.set_data('label', label)
+			hid = tbi.connect('clicked', on_click_button, fnc_left)
+		tbi.set_data('clicked-handler', hid)
+		toolbar.insert(tbi, -1)
+		items.append(tbi)
+	return items
+
+def mkdir(d):
+	p = os.path.dirname(d)
+	if not os.path.exists(p):
+		mkdir(p)
+	try:
+		os.mkdir(d)
+	except OSError, e:
+		if e.errno != os.errno.EEXIST:
+			raise e
+
+
+### Private methods ###
+
+class Download(object):
+	def __init__(self, url, params=[], retries=1, target_dir='.'):
+		self.original_url = url
+		self.params = params
+		self.retries = retries
+		self.target_dir = target_dir
+		self.pid = None
+		self.outfile = None
+		self.percent = -1
+		self.status = _("Initiating")
+		self.lastline = ''
+		self.finished = False
+	def spawn_wget(self, args=[]):
+		reader, writer = os.pipe()
+		pid = os.fork()
+		if pid == 0:
+			os.putenv('LANG', 'C')
+			os.close(reader)
+			os.dup2(writer, sys.stdout.fileno())
+			os.dup2(writer, sys.stderr.fileno())
+			sys.stdin.close()
+			os.closerange(3, 255)
+			os.execvp('wget', ['wget'] + args)
+			os._exit(127)
+		os.close(writer)
+		return os.fdopen(reader, 'r')
+	def start(self):
+		self.logfile = next_logfile()
+		wget_args = self.params + ['--append-output', self.logfile, '--adjust-extension', \
+		  '--content-disposition', '--background', '--continue', '--tries', str(self.retries), \
+		  '--directory-prefix', self.target_dir, '--verbose', '--progress=bar:force']
+		wget_args.append(self.original_url)
+		try:
+			readhandle = self.spawn_wget(wget_args)
+		except OSError, e:
+			display_error(e)
+			return
+		for line in readhandle.readlines():
+			m = re.search('pid (\d+)', line)
+			if m:
+				self.pid = int(m.group(1))
+				break
+		t = threading.Thread(target=self.watch_log, args=())
+		t.daemon = True
+		t.start()
+	def watch_log(self):
+		while not os.path.exists(self.logfile):
+			time.sleep(1)
+		fh = open(self.logfile, 'r')
+		while True:
+			line = fh.readline()
+			if line == '':
+				try:
+					os.kill(self.pid, 0)
+				except OSError:
+					break
+				time.sleep(0.4)
+				continue
+			
+			line = line.strip()
+			try: line = line[line.rindex('\r')+1:]
+			except ValueError: pass
+			if line == '': continue
+			
+			refresh = False
+			m_name = re.search('^Saving to: .(.+).$', line)
+			m_percent = re.search('^\s{0,2}(\d+)(\.\d+)?%', line)
+			m_progress = re.search('^\s+\[', line)
+			#m_speed = re.search('(\d+(?:\.\d+)?)K/s  eta (\S+)', line)
+			m_finished = re.search(' saved \S+$', line)
+			
+			if m_name:
+				self.outfile = m_name.group(1)
+				refresh = True
+			if m_percent:
+				self.percent = int(m_percent.group(1))
+				self.status = _("Downloading")
+				refresh = True
+			if m_progress:
+				pulse_download(self.pid)
+				self.status = _("Downloading")
+				refresh = True
+			if m_finished:
+				self.finished = True
+				self.status = _("Saved")
+				refresh = True
+			self.lastline = line
+			refresh = True
+
+			if refresh:
+				gtk.threads_enter()
+				refresh_download_state(self.pid)
+				gtk.threads_leave()
+		self.pid = None
+		fh.close()
+	def stop(self):
+		if self.pid is not None:
+			os.kill(self.pid, signal.SIGTERM)
+
+
+def win_main_show():
+	if args.URL:
+		# TODO start download
+		for url in args.URL:
+			start_new_download(url)
+
+def next_logfile():
+	n = len(os.listdir(CacheFolder))
+	f = 'gwget.' + str(n)
+	while os.path.exists(os.path.join(CacheFolder, f)):
+		n += 1
+		f = 'gwget.' + str(n)
+	return os.path.join(CacheFolder, f)
+
+class iter_downloadlist(object):
+	def __init__(self, rit=False):
+		self.rit = rit
+	def __iter__(self):
+		self.model = DownLoadList
+		self.iter = self.model.get_iter_first()
+		return self
+	def next(self):
+		if self.iter is None:
+			raise StopIteration
+		if self.rit:
+			ret = (self.model[self.iter][COL_DLOBJ], self.model[self.iter])
+		else:
+			ret = self.model[self.iter][COL_DLOBJ]
+		self.iter = self.model.iter_next(self.iter)
+		return ret
+	def __del__(self):
+		pass
+
+def refresh_download_state(pid):
+	for dl, it in iter_downloadlist(True):
+		if dl.pid == pid:
+			it[COL_NAME] = os.path.basename(dl.outfile or '')
+			if dl.percent >= 0:
+				it[COL_PULSE] = -1
+				it[COL_PERCENT] = dl.percent
+				it[COL_PRCSTR] = str(dl.percent) + '%'
+			else:
+				if dl.finished:
+					it[COL_PULSE] = gobject.constants.G_MAXINT
+				else:
+					it[COL_PULSE] += 2
+				it[COL_PRCSTR] = ''
+			it[COL_STATUS] = dl.status
+			it[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
+			break
+
+def pulse_download(pid):
+	for dl, it in iter_downloadlist(True):
+		if dl.pid == pid:
+			it[COL_PULSE] += 1
+
+def finished_download(pid):
+	pass
+
+def start_new_download(url):
+	dl = Download(url)
+	dl.start()
+	DownLoadList.append([dl, '', gtk.STOCK_FILE, None, '', 0, 0, '', ''])
+
+
+### Interface procedures ###
+
+def act_new():
+	# TODO
+	#start_new_download()
+	pass
+
+def act_start_all():
+	pass
+
+def act_pause_all():
+	pass
+
+def act_clear_completed():
+	for dl, it in iter_downloadlist(True):
+		if dl.finished:
+			act_clear_download(it)
+
+
+def act_start():
+	pass
+
+def act_pause():
+	pass
+
+def act_clear_download(it):
+	dl = DownLoadList[it][COL_DLOBJ]
+	try:
+		os.unlink(dl.logfile)
+	except OSError, e:
+		if e.errno != os.errno.ENOENT:
+			display_error(e)
+	del(DownLoadList[it])
+
+def act_props():
+	for dl in iter_downloadlist():
+		print "pid = %s\nurl = %s\nfile = %s\npercent = %s\n\n" % (dl.pid, dl.original_url, dl.outfile, dl.percent)
+
+def act_options():
+	pass
+
+
+def on_selection(selection):
+	nrows = len(selection.get_selected_rows()[1])
+	on = True if nrows == 1 else False
+	btn_props.set_sensitive(on)
+
+def on_context_menu(menuitem):
+	pass
+
+def on_treeview_click(tree, event):
+	if event.button == 3:
+		x = int(event.x)
+		y = int(event.y)
+		pathinfo = main_list.get_path_at_pos(x, y)
+		if pathinfo is not None:
+			path, col, cellx, celly = pathinfo
+			main_list.grab_focus()
+			main_list.set_cursor(path, col, 0)
+			ContextMenu.set_data('iter', DownLoadList[path])
+			ContextMenu.popup(None, None, None, event.button, event.time)
+		return True
+
+
+
+### Main ###
+
+PROGNAME = 'gwget'
+_ = gettext.gettext
+LastFolder = os.getcwd()
+XATTR_CHARSET = 'user.mime_encoding'
+CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
+
+argparser = argparse.ArgumentParser()
+argparser.add_argument('--stdin', help=_(""))
+argparser.add_argument('--proxy', metavar='URL', help=_(""))
+argparser.add_argument('--auth', metavar='USER:PASS', help=_(""))
+argparser.add_argument('--cookie', metavar='NAME=STRING;NAME=STRING;...', help=_(""))
+argparser.add_argument('--cookie-jar', metavar='FILE', help=_(""))
+argparser.add_argument('--referer', metavar='URL', help=_(""))
+argparser.add_argument('--agent', metavar='STRING', help=_(""))
+argparser.add_argument('URL', nargs='*', help=_(""))
+args = argparser.parse_args()
+
+
+gtk.gdk.threads_init()
+mkdir(CacheFolder)
+# FIXME initiate list of downloads
+
+
+### Build GUI ###
+
+win_main = gtk.Window()
+win_main.set_default_size(800, 450)
+start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
+win_main.connect('delete-event', lambda w,e: act_quit())
+add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
+add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
+add_key_binding(win_main, '<Control>o', lambda a,b,c,d: act_options())
+
+box1 = gtk.VBox()
+main_toolbar = gtk.Toolbar()
+scroller = gtk.ScrolledWindow()
+COL_DLOBJ, COL_NAME, COL_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS, COL_MESSAGE = range(9)
+DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, str, float, int, str, str)
+ContextMenu = gtk.Menu()
+cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
+main_list = gtk.TreeView(DownLoadList)
+main_selection = main_list.get_selection()
+
+
+toolbuttons = [
+	(None, gtk.STOCK_NEW, None, act_new),
+	(_("Resume All"), 'media-playback-start', None, act_start_all),
+	(_("Pause All"), 'media-playback-pause', None, act_pause_all),
+	(_("Clear Completed"), gtk.STOCK_CLEAR, None, act_clear_completed),
+	(None, None, None, 'separator'),
+	(None, gtk.STOCK_PROPERTIES, None, act_props),
+	(None, None, None, 'space'),
+	(None, gtk.STOCK_PREFERENCES, None, act_options),
+	(None, gtk.STOCK_QUIT, None, act_quit),
+]
+x, x, x, x, x_, btn_props, x_, x, x \
+= load_toolitems(main_toolbar, toolbuttons)
+btn_props.set_sensitive(False)
+
+
+tvc = gtk.TreeViewColumn(_("Filename"))
+cr_pix = gtk.CellRendererPixbuf()
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_pix, False)
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'markup', COL_NAME)
+tvc.add_attribute(cr_pix, 'icon-name', COL_ICON)
+tvc.add_attribute(cr_pix, 'pixbuf', COL_PXB)
+main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("Progress"))
+cr_prc = gtk.CellRendererProgress()
+tvc.pack_start(cr_prc, True)
+tvc.add_attribute(cr_prc, 'text', COL_PRCSTR)
+tvc.add_attribute(cr_prc, 'value', COL_PERCENT)
+tvc.add_attribute(cr_prc, 'pulse', COL_PULSE)
+main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("Status"))
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'text', COL_STATUS)
+main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("Message"))
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
+main_list.append_column(tvc)
+
+main_list.set_rules_hint(True)
+main_list.set_headers_clickable(True)
+main_list.set_reorderable(True)
+main_list.connect('button-press-event', on_treeview_click)
+main_selection.set_mode(gtk.SELECTION_MULTIPLE)
+main_selection.connect('changed', on_selection)
+cmi_open.connect('activate', on_context_menu)
+
+
+win_main.add(box1)
+box1.pack_start(main_toolbar, 0, 1)
+box1.pack_start(scroller, 1, 1)
+scroller.add_with_viewport(main_list)
+scroller.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+ContextMenu.append(cmi_open)
+ContextMenu.show_all()
+
+win_main.show_all()
+gtk.main()
+
