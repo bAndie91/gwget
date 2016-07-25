@@ -201,14 +201,16 @@ class Download(object):
 		self.pid = None
 		self.outfile = None
 		self.percent = -1
-		self.status = _("Initiating")
+		self.status = S_INIT
 		self.lastline = ''
+		self.completed = False
 		self.finished = False
 	def spawn_wget(self, args=[]):
 		reader, writer = os.pipe()
 		pid = os.fork()
 		if pid == 0:
 			os.putenv('LANG', 'C')
+			#os.putenv('http_proxy', )
 			os.close(reader)
 			os.dup2(writer, sys.stdout.fileno())
 			os.dup2(writer, sys.stderr.fileno())
@@ -261,32 +263,34 @@ class Download(object):
 			m_percent = re.search('^\s{0,2}(\d+)(\.\d+)?%', line)
 			m_progress = re.search('^\s+\[', line)
 			#m_speed = re.search('(\d+(?:\.\d+)?)K/s  eta (\S+)', line)
-			m_finished = re.search(' saved \S+$', line)
+			m_completed = re.search(' saved \S+$', line)
 			
 			if m_name:
 				self.outfile = m_name.group(1)
 				refresh = True
 			if m_percent:
 				self.percent = int(m_percent.group(1))
-				self.status = _("Downloading")
+				self.status = S_DL
 				refresh = True
 			if m_progress:
 				pulse_download(self.pid)
-				self.status = _("Downloading")
+				self.status = S_DL
 				refresh = True
-			if m_finished:
-				self.finished = True
-				self.status = _("Saved")
+			if m_completed:
+				self.completed = True
+				self.status = S_SAVED
 				refresh = True
 			self.lastline = line
 			refresh = True
 
 			if refresh:
-				gtk.threads_enter()
 				refresh_download_state(self.pid)
-				gtk.threads_leave()
 		self.pid = None
 		fh.close()
+		self.finished = True
+		if self.status != S_SAVED:
+			self.status = S_ERR
+		refresh_download_state(self.pid)
 	def stop(self):
 		if self.pid is not None:
 			os.kill(self.pid, signal.SIGTERM)
@@ -317,7 +321,7 @@ class iter_downloadlist(object):
 		if self.iter is None:
 			raise StopIteration
 		if self.rit:
-			ret = (self.model[self.iter][COL_DLOBJ], self.model[self.iter])
+			ret = (self.model[self.iter][COL_DLOBJ], self.iter)
 		else:
 			ret = self.model[self.iter][COL_DLOBJ]
 		self.iter = self.model.iter_next(self.iter)
@@ -328,28 +332,29 @@ class iter_downloadlist(object):
 def refresh_download_state(pid):
 	for dl, it in iter_downloadlist(True):
 		if dl.pid == pid:
-			it[COL_NAME] = os.path.basename(dl.outfile or '')
+			row = DownLoadList[it]
+			row[COL_NAME] = os.path.basename(dl.outfile or '')
 			if dl.percent >= 0:
-				it[COL_PULSE] = -1
-				it[COL_PERCENT] = dl.percent
-				it[COL_PRCSTR] = str(dl.percent) + '%'
+				row[COL_PULSE] = -1
+				row[COL_PERCENT] = dl.percent
+				row[COL_PRCSTR] = str(dl.percent) + '%'
 			else:
 				if dl.finished:
-					it[COL_PULSE] = gobject.constants.G_MAXINT
+					if dl.completed:
+						row[COL_PULSE] = gobject.constants.G_MAXINT
+					else:
+						row[COL_PULSE] = 0
 				else:
-					it[COL_PULSE] += 2
-				it[COL_PRCSTR] = ''
-			it[COL_STATUS] = dl.status
-			it[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
+					row[COL_PULSE] += 2
+				row[COL_PRCSTR] = ''
+			row[COL_STATUS] = _(Status[dl.status])
+			row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
 			break
 
 def pulse_download(pid):
 	for dl, it in iter_downloadlist(True):
 		if dl.pid == pid:
-			it[COL_PULSE] += 1
-
-def finished_download(pid):
-	pass
+			DownLoadList[it][COL_PULSE] += 1
 
 def start_new_download(url):
 	dl = Download(url)
@@ -372,7 +377,7 @@ def act_pause_all():
 
 def act_clear_completed():
 	for dl, it in iter_downloadlist(True):
-		if dl.finished:
+		if dl.completed:
 			act_clear_download(it)
 
 
@@ -389,7 +394,7 @@ def act_clear_download(it):
 	except OSError, e:
 		if e.errno != os.errno.ENOENT:
 			display_error(e)
-	del(DownLoadList[it])
+	del DownLoadList[it]
 
 def act_props():
 	for dl in iter_downloadlist():
@@ -429,6 +434,13 @@ _ = gettext.gettext
 LastFolder = os.getcwd()
 XATTR_CHARSET = 'user.mime_encoding'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
+S_INIT, S_DL, S_SAVED, S_ERR = range(4)
+Status = {
+	S_INIT: "Init",
+	S_DL: "Download",
+	S_SAVED: "Saved",
+	S_ERR: "Failed",
+}
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--stdin', help=_(""))
