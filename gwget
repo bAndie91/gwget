@@ -189,6 +189,15 @@ def mkdir(d):
 		if e.errno != os.errno.EEXIST:
 			raise e
 
+def delete(f):
+	try:
+		os.unlink(f)
+	except OSError, e:
+		if e.errno != os.errno.ENOENT:
+			display_error(e)
+			return False
+	return True
+
 
 ### Private methods ###
 
@@ -198,7 +207,10 @@ class Download(object):
 		self.params = params
 		self.retries = retries
 		self.target_dir = target_dir
+		
 		self.pid = None
+		self.logfile = None
+		
 		self.outfile = None
 		self.percent = -1
 		self.status = S_INIT
@@ -221,8 +233,10 @@ class Download(object):
 		os.close(writer)
 		return os.fdopen(reader, 'r')
 	def start(self):
-		self.logfile = next_logfile()
-		wget_args = self.params + ['--append-output', self.logfile, '--adjust-extension', \
+		if self.logfile is None:
+			self.logfile = next_logfile()
+		if not delete(self.logfile): return
+		wget_args = self.params + ['--output-file', self.logfile, '--adjust-extension', \
 		  '--content-disposition', '--background', '--continue', '--tries', str(self.retries), \
 		  '--directory-prefix', self.target_dir, '--verbose', '--progress=bar:force']
 		wget_args.append(self.original_url)
@@ -285,15 +299,19 @@ class Download(object):
 
 			if refresh:
 				refresh_download_state(self.pid)
-		self.pid = None
 		fh.close()
 		self.finished = True
 		if self.status != S_SAVED:
 			self.status = S_ERR
 		refresh_download_state(self.pid)
+		self.pid = None
 	def stop(self):
 		if self.pid is not None:
-			os.kill(self.pid, signal.SIGTERM)
+			try:
+				os.kill(self.pid, signal.SIGTERM)
+			except OSError, e:
+				if e.errno != os.errno.ESRCH:
+					raise e
 
 
 def win_main_show():
@@ -378,39 +396,58 @@ def act_pause_all():
 def act_clear_completed():
 	for dl, it in iter_downloadlist(True):
 		if dl.completed:
-			act_clear_download(it)
-
-
-def act_start():
-	pass
-
-def act_pause():
-	pass
-
-def act_clear_download(it):
-	dl = DownLoadList[it][COL_DLOBJ]
-	try:
-		os.unlink(dl.logfile)
-	except OSError, e:
-		if e.errno != os.errno.ENOENT:
-			display_error(e)
-	del DownLoadList[it]
-
-def act_props():
-	for dl in iter_downloadlist():
-		print "pid = %s\nurl = %s\nfile = %s\npercent = %s\n\n" % (dl.pid, dl.original_url, dl.outfile, dl.percent)
+			act_clear_download(it, dl)
 
 def act_options():
 	pass
 
 
+def act_open_file(it, dl):
+	pass
+
+def act_open_folder(it, dl):
+	pass
+
+def act_start(it, dl):
+	dl.start()
+
+def act_pause(it, dl):
+	dl.stop()
+
+def act_clear_download(it, dl):
+	if dl.finished:
+		delete(dl.logfile)
+		del DownLoadList[it]
+
+def act_remove_download(it, dl):
+	if dl.finished and dl.outfile is not None:
+		delete(dl.outfile)
+
+def act_props(it, dl):
+	print "pid = %s\nurl = %s\nfile = %s\npercent = %s\n---\n" % (dl.pid, dl.original_url, dl.outfile, dl.percent)
+
+
+
+def act_on_selection(func):
+	for itpath in main_selection.get_selected_rows()[1]:
+		it = DownLoadList.get_iter(itpath)
+		func(it, DownLoadList[it][COL_DLOBJ])
+
 def on_selection(selection):
 	nrows = len(selection.get_selected_rows()[1])
 	on = True if nrows == 1 else False
 	btn_props.set_sensitive(on)
+	on = True if nrows >= 1 else False
+	btn_resume.set_sensitive(on)
+	btn_pause.set_sensitive(on)
+	btn_remove.set_sensitive(on)
+	btn_clear.set_sensitive(on)
 
-def on_context_menu(menuitem):
-	pass
+def on_context_menu(menuitem, function):
+	it = DownLoadList.get_iter(ContextMenu.get_data('itpath'))
+	dl = DownLoadList[it][COL_DLOBJ]
+	function(it, dl)
+	return True
 
 def on_treeview_click(tree, event):
 	if event.button == 3:
@@ -421,7 +458,7 @@ def on_treeview_click(tree, event):
 			path, col, cellx, celly = pathinfo
 			main_list.grab_focus()
 			main_list.set_cursor(path, col, 0)
-			ContextMenu.set_data('iter', DownLoadList[path])
+			ContextMenu.set_data('itpath', path)
 			ContextMenu.popup(None, None, None, event.button, event.time)
 		return True
 
@@ -474,10 +511,16 @@ main_toolbar = gtk.Toolbar()
 scroller = gtk.ScrolledWindow()
 COL_DLOBJ, COL_NAME, COL_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS, COL_MESSAGE = range(9)
 DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, str, float, int, str, str)
-ContextMenu = gtk.Menu()
-cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
+ContextMenu = gtk.Menu()
+cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
+cmi_folder = StockMenuItem(None, gtk.STOCK_DIRECTORY)
+cmi_remove = StockMenuItem(None, gtk.STOCK_DELETE)
+cmi_resume = StockMenuItem(_("Resume"), 'media-playback-start')
+cmi_pause = StockMenuItem(_("Pause"), 'media-playback-pause')
+cmi_clear = StockMenuItem(None, gtk.STOCK_CLEAR)
+cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
 
 
 toolbuttons = [
@@ -486,14 +529,18 @@ toolbuttons = [
 	(_("Pause All"), 'media-playback-pause', None, act_pause_all),
 	(_("Clear Completed"), gtk.STOCK_CLEAR, None, act_clear_completed),
 	(None, None, None, 'separator'),
-	(None, gtk.STOCK_PROPERTIES, None, act_props),
+	(_("Resume"), 'media-playback-start', None, (act_on_selection, act_start)),
+	(_("Pause"), 'media-playback-pause', None, (act_on_selection, act_pause)),
+	(None, gtk.STOCK_DELETE, None, (act_on_selection, act_remove_download)),
+	(_("Clear"), gtk.STOCK_CLEAR, None, (act_on_selection, act_clear_download)),
+	(None, gtk.STOCK_PROPERTIES, None, (act_on_selection, act_props)),
 	(None, None, None, 'space'),
 	(None, gtk.STOCK_PREFERENCES, None, act_options),
 	(None, gtk.STOCK_QUIT, None, act_quit),
 ]
-x, x, x, x, x_, btn_props, x_, x, x \
+x, x, x, x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
-btn_props.set_sensitive(False)
+on_selection(main_selection)
 
 
 tvc = gtk.TreeViewColumn(_("Filename"))
@@ -529,7 +576,13 @@ main_list.set_reorderable(True)
 main_list.connect('button-press-event', on_treeview_click)
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection)
-cmi_open.connect('activate', on_context_menu)
+cmi_open.connect('activate', on_context_menu, act_open_file)
+cmi_folder.connect('activate', on_context_menu, act_open_folder)
+cmi_remove.connect('activate', on_context_menu, act_remove_download)
+cmi_resume.connect('activate', on_context_menu, act_start)
+cmi_pause.connect('activate', on_context_menu, act_pause)
+cmi_clear.connect('activate', on_context_menu, act_clear_download)
+cmi_props.connect('activate', on_context_menu, act_props)
 
 
 win_main.add(box1)
@@ -538,6 +591,14 @@ box1.pack_start(scroller, 1, 1)
 scroller.add_with_viewport(main_list)
 scroller.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
 ContextMenu.append(cmi_open)
+ContextMenu.append(cmi_folder)
+ContextMenu.append(cmi_remove)
+ContextMenu.append(gtk.SeparatorMenuItem())
+ContextMenu.append(cmi_resume)
+ContextMenu.append(cmi_pause)
+ContextMenu.append(cmi_clear)
+ContextMenu.append(gtk.SeparatorMenuItem())
+ContextMenu.append(cmi_props)
 ContextMenu.show_all()
 
 win_main.show_all()
