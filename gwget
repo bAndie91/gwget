@@ -261,6 +261,8 @@ class Download(object):
 	def __init__(self, url, params=[], retries=1, target_dir='.'):
 		self.original_url = url
 		self.params = params
+		self.progress_type = 'bar:force'
+		#self.progress_type = 'dot:default'
 		self.retries = retries
 		self.target_dir = target_dir
 		self.logfile = None
@@ -321,11 +323,9 @@ class Download(object):
 		if not delete(self.logfile, warn=False):
 			return
 		
-		progress = 'bar:force'
-		#progress = 'dot:default'
 		wget_args = self.params + ['--output-file', self.logfile, '--adjust-extension', \
 		  '--content-disposition', '--background', '--continue', '--tries', str(self.retries), \
-		  '--directory-prefix', self.target_dir, '--verbose', '--progress', progress]
+		  '--directory-prefix', self.target_dir, '--verbose', '--progress', self.progress_type]
 		wget_args.append(self.original_url)
 		try:
 			readhandle = self.spawn_wget(wget_args)
@@ -371,10 +371,9 @@ class Download(object):
 			except ValueError: rline = line
 			if line[-1] == '\n':
 				linebuffer = ''
-				line = line.strip()
 			else:
 				linebuffer = rline
-				line = rline.strip()
+			line = rline.strip()
 			if line == '':
 				continue
 			
@@ -483,7 +482,10 @@ def refresh_download_state(pid, it0=None):
 				row[COL_PRCSTR] = str(dl.percent) + '%'
 			else:
 				if dl.running:
-					row[COL_PULSE] += 2
+					try:
+						row[COL_PULSE] += 2
+					except TypeError:
+						row[COL_PULSE] = 1
 				else:
 					if dl.completed:
 						row[COL_PULSE] = gobject.constants.G_MAXINT
