@@ -45,19 +45,23 @@ def display_error(e):
 class DialogCancel(Exception):
 	pass
 
-def question(msg, stock_yes=None, parent=None, cancelable=False):
-	dlg = gtk.MessageDialog(parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO)
+def question(msg, yes=None, parent=None, cancelable=False):
+	dlg = gtk.MessageDialog(parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_NONE)
 	dlg.set_markup(msg)
 	dlg.set_title(_("Question"))
-	if stock_yes is not None:
-		dlg.get_widget_for_response(gtk.RESPONSE_YES).hide()
-		btn_yes = StockButton(label=stock_yes[0], stock=stock_yes[1])
-		dlg.add_action_widget(btn_yes, gtk.RESPONSE_YES)
-		btn_yes.show()
+	if yes is None:
+		dlg.add_buttons(gtk.STOCK_YES, gtk.RESPONSE_YES)
+	else:
+		if type(yes) in [type(()), type([])]:
+			btn_yes = StockButton(label=yes[0], stock=yes[1])
+			dlg.add_action_widget(btn_yes, gtk.RESPONSE_YES)
+			btn_yes.show()
+		else:
+			dlg.add_buttons(yes, gtk.RESPONSE_YES)
+	dlg.add_buttons(gtk.STOCK_NO, gtk.RESPONSE_NO)
 	if cancelable:
-		btn_cancel = gtk.Button(stock=gtk.STOCK_CANCEL)
-		dlg.add_action_widget(btn_cancel, gtk.RESPONSE_CANCEL)
-		btn_cancel.show()
+		dlg.add_buttons(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL)
+		add_key_binding(dlg, 'Escape', lambda a,b,c,d: dlg.response(gtk.RESPONSE_CANCEL) or True)
 	resp = dlg.run()
 	dlg.destroy()
 	if resp == gtk.RESPONSE_CANCEL:
@@ -259,11 +263,39 @@ class Download(object):
 		self.params = params
 		self.retries = retries
 		self.target_dir = target_dir
-		self.pid = None
 		self.logfile = None
 		self.outfile = None
 		self.Lock = threading.Lock()
+		self._pid = None
 		self.init()
+	def init(self):
+		self['status'] = S_QUEUE
+		self.completed = False
+		self.running = False
+		self.size = None
+		self.percent = -1
+		self.lastline = ''
+	def __getitem__(self, key):
+		self.Lock.acquire(True)
+		if hasattr(self, '_' + key):
+			self.Lock.release()
+			return getattr(self, '_' + key)
+		else:
+			raise KeyError()
+	def __setitem__(self, key, val):
+		self.Lock.acquire(True)
+		if key == 'status' and hasattr(self, '_status'):
+			if (self._status == S_STOP and val == S_DL) or (val == S_ERR and self._status in [S_SAVED, S_STOP]):
+				self.Lock.release()
+				return False
+		setattr(self, '_' + key, val)
+		self.Lock.release()
+		return True
+	def __delitem__(self, key):
+		self.Lock.acquire(True)
+		if hasattr(self, '_' + key):
+			delattr(self, '_' + key)
+		self.Lock.release()
 	def spawn_wget(self, args=[]):
 		reader, writer = os.pipe()
 		pid = os.fork()
@@ -279,27 +311,8 @@ class Download(object):
 			os._exit(127)
 		os.close(writer)
 		return os.fdopen(reader, 'r')
-	def status(self, status=None):
-		self.Lock.acquire(True)
-		if not hasattr(self, '_status'):
-			self._status = S_QUEUE
-		if status is not None:
-			if self._status == S_STOP and status == S_DL:
-				pass
-			else:
-				self._status = status
-		self.Lock.release()
-		return self._status
-	def init(self):
-		self.status(S_QUEUE)
-		self.size = None
-		self.percent = -1
-		self.linebuffer = ''
-		self.lastline = ''
-		self.completed = False
-		self.running = False
 	def start(self):
-		if self.pid is not None:
+		if self['pid'] is not None:
 			return
 		self.init()
 		refresh_download_state(None, self.iterator)
@@ -319,42 +332,51 @@ class Download(object):
 		except OSError, e:
 			display_error(e)
 			return
-		self.status(S_INIT)
+		
+		self['status'] = S_INIT
 		refresh_download_state(None, self.iterator)
 		for line in readhandle.readlines():
-			m = re.search('pid (\d+)', line)
-			if m:
-				self.pid = int(m.group(1))
+			m_pid = re.search('pid (\d+)', line)
+			if m_pid:
+				self['pid'] = int(m_pid.group(1))
 				break
 		t = threading.Thread(target=self.watch_log, args=())
 		t.daemon = True
 		t.start()
+	def wget_running(self):
+		if self['pid'] is not None:
+			try:
+				os.kill(self['pid'], 0)
+				return True
+			except OSError:
+				pass
+		return False
 	def watch_log(self):
 		while not os.path.exists(self.logfile):
 			time.sleep(1)
 		self.running = True
 		fh = open(self.logfile, 'r')
+		linebuffer = ''
 		while True:
-			line = fh.readline()
-			line = self.linebuffer + line
-			if line == '':
-				try:
-					os.kill(self.pid, 0)
-				except OSError:
+			data = fh.readline()
+			if data == '':
+				if self.wget_running():
+					time.sleep(0.4)
+					continue
+				else:
 					break
-				time.sleep(0.4)
-				continue
 			
+			line = linebuffer + data
+			try: rline = line[line.rindex('\r')+1:]
+			except ValueError: rline = line
 			if line[-1] == '\n':
-				self.linebuffer = ''
-				line = line[:-1]
+				linebuffer = ''
+				line = line.strip()
 			else:
-				try: self.linebuffer = line[line.rindex('\r')+1:]
-				except ValueError: self.linebuffer = line
-			try: line = line[:line.index('\r')]
-			except ValueError: pass
-			line = line.strip()
-			if line == '': continue
+				linebuffer = rline
+				line = rline.strip()
+			if line == '':
+				continue
 			
 			refresh = False
 			m_length = re.search('^Length: (\d+)', line)
@@ -376,11 +398,11 @@ class Download(object):
 				refresh = True
 			if m_percent:
 				self.percent = int(m_percent.group(1))
-				self.status(S_DL)
+				self['status'] = S_DL
 				refresh = True
 			if m_progress:
-				pulse_download(self.pid)
-				self.status(S_DL)
+				pulse_download(self['pid'])
+				self['status'] = S_DL
 				refresh = True
 			if m_kilodots:
 				if self.size is not None:
@@ -388,29 +410,30 @@ class Download(object):
 					dots = len(''.join(m_kilodots.group(2).split()))
 					self.percent = int((kilo + dots) * 1024 * 100 / self.size)
 				else:
-					pulse_download(self.pid)
-				self.status(S_DL)
+					pulse_download(self['pid'])
+				self['status'] = S_DL
 				refresh = True
 			if m_completed:
 				self.completed = True
-				self.status(S_SAVED)
+				self['status'] = S_SAVED
 				refresh = True
 			if self.lastline != line:
 				refresh = True
 			self.lastline = line
 			if refresh:
-				refresh_download_state(self.pid)
+				refresh_download_state(self['pid'])
+		print "exit loop"
 		fh.close()
 		self.running = False
-		self.pid = None
-		if self.status() not in [S_SAVED, S_STOP]:
-			self.status(S_ERR)
-		refresh_download_state(self.pid)
+		self['status'] = S_ERR
+		refresh_download_state(self['pid'])
+		self['pid'] = None
+		print "quit loop"
 	def stop(self):
-		if self.pid is not None:
+		if self['pid'] is not None:
 			try:
-				os.kill(self.pid, signal.SIGTERM)
-				self.status(S_STOP)
+				os.kill(self['pid'], signal.SIGTERM)
+				self['status'] = S_STOP
 			except OSError, e:
 				if e.errno != os.errno.ESRCH:
 					raise e
@@ -451,7 +474,7 @@ class iter_downloadlist(object):
 
 def refresh_download_state(pid, it0=None):
 	for dl, it in iter_downloadlist(True):
-		if (pid is not None and dl.pid == pid) or (it0 is not None and it == it0):
+		if (pid is not None and dl['pid'] == pid) or (it0 is not None and it == it0):
 			row = DownLoadList[it]
 			row[COL_NAME] = os.path.basename(dl.outfile or '')
 			if dl.percent >= 0:
@@ -467,33 +490,37 @@ def refresh_download_state(pid, it0=None):
 					else:
 						row[COL_PULSE] = 0
 				row[COL_PRCSTR] = ''
-			row[COL_STATUS_ICON] = StatusIcon[dl.status()]
-			row[COL_STATUS] = _(Status[dl.status()])
+			row[COL_STATUS_ICON] = StatusIcon[dl['status']]
+			row[COL_STATUS] = _(Status[dl['status']])
 			row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
 			
 			# if the current download is selected, then refresh toolbuttons sensitivity
 			if DownLoadList.get_path(it) in main_selection.get_selected_rows()[1]:
+				gtk.threads_enter()
 				on_selection_change(main_selection)
+				gtk.threads_leave()
 			break
 
 def pulse_download(pid):
 	for dl, it in iter_downloadlist(True):
-		if dl.pid == pid:
+		if dl['pid'] == pid:
 			DownLoadList[it][COL_PULSE] += 1
 
 def start_new_download(url, start=True):
 	dl = Download(url)
 	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, '', 0, 0, gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
 	dl.iterator = it
-	if start: dl.start()
+	if start:
+		dl.start()
 
 
 ### Interface procedures ###
 
 def act_new():
 	bufr_urls.set_text('')
-	txv_urls.grab_focus()
 	win_newdl.show_all()
+	note.set_current_page(0)
+	txv_urls.grab_focus()
 
 def act_start_all():
 	for dl in iter_downloadlist():
@@ -532,15 +559,15 @@ def act_pause(it, dl):
 	dl.stop()
 
 def act_remove_download(it, dl, force=False):
-	if not dl.running and dl.outfile is not None and os.path.exists(dl.outfile):
-		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?")):
+	if not dl.running and dl.outfile is not None:
+		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?"), yes=gtk.STOCK_DELETE):
 			delete(dl.outfile)
 
 def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> download?")):
+				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> download?"), yes=gtk.STOCK_DELETE, cancelable=True):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
@@ -709,6 +736,7 @@ on_selection_change(main_selection)
 
 
 tvc = gtk.TreeViewColumn(_("Filename"))
+tvc.set_resizable(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_pix, False)
@@ -718,6 +746,7 @@ tvc.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
 tvc.add_attribute(cr_pix, 'pixbuf', COL_PXB)
 main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Progress"))
+tvc.set_resizable(True)
 cr_prc = gtk.CellRendererProgress()
 tvc.pack_start(cr_prc, True)
 tvc.add_attribute(cr_prc, 'text', COL_PRCSTR)
@@ -725,6 +754,7 @@ tvc.add_attribute(cr_prc, 'value', COL_PERCENT)
 tvc.add_attribute(cr_prc, 'pulse', COL_PULSE)
 main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Status"))
+tvc.set_resizable(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_pix, False)
@@ -733,6 +763,7 @@ tvc.add_attribute(cr_txt, 'text', COL_STATUS)
 tvc.add_attribute(cr_pix, 'icon-name', COL_STATUS_ICON)
 main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Message"))
+tvc.set_resizable(True)
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_txt, True)
 tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
