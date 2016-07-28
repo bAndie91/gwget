@@ -15,6 +15,7 @@ import argparse
 import xattr
 import threading
 import time
+import functools
 
 
 def act_quit():
@@ -72,10 +73,7 @@ def set_dialog_icon_name(dlg, icon):
 	img = dlg.get_content_area().children()[0].children()[0]
 	img.set_from_icon_name(icon, gtk.ICON_SIZE_DIALOG)
 
-def choose_dialog(action, filename=None, folder=None):
-	global LastFolder
-	selected = None
-	
+def create_choose_dialog(action, filename=None, folder=None):
 	btn_accept_stock = gtk.STOCK_OPEN
 	if action == gtk.FILE_CHOOSER_ACTION_SAVE:
 		btn_accept_stock = gtk.STOCK_SAVE
@@ -86,6 +84,12 @@ def choose_dialog(action, filename=None, folder=None):
 	btn_cwd = StockButton(label=_("Working Dir"), stock=gtk.STOCK_JUMP_TO)
 	dlg.add_action_widget(btn_cwd, gtk.RESPONSE_NO)
 	btn_cwd.show()
+	return dlg
+
+def choose_dialog(action, filename=None, folder=None):
+	global LastFolder
+	selected = None
+	dlg = create_choose_dialog(action, filename=None, folder=None)
 	while True:
 		resp = dlg.run()
 		if resp == gtk.RESPONSE_ACCEPT:
@@ -100,13 +104,55 @@ def choose_dialog(action, filename=None, folder=None):
 	return selected
 
 def choose_save_file(filename=None):
-	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SAVE, filename)
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SAVE, filename=filename)
 
 def choose_folder(folder=None):
 	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER, folder=folder)
 
-def choose_open_file():
-	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN)
+def choose_open_file(folder=None):
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN, folder=folder)
+
+class FileChooserEntry(gtk.HBox):
+	def __init__(self, label='', init='', action=gtk.FILE_CHOOSER_ACTION_OPEN):
+		super(self.__class__, self).__init__()
+		self.label = gtk.Label(label)
+		self.label.set_alignment(0, 0)
+		self.label.set_padding(4, 5)
+		self.entry = gtk.Entry()
+		self.entry.set_text(init)
+		self.button = StockButton(label='', stock=gtk.STOCK_OPEN, icon_size=gtk.ICON_SIZE_SMALL_TOOLBAR)
+		self.button.connect('clicked', self.choose, action)
+		self.pack_start(self.label, 0, 0)
+		self.pack_start(self.entry, 0, 1)
+		self.pack_start(self.button, 0, 0)
+	def get_text(self):
+		return self.entry.get_text()
+	def set_text(self, text):
+		return self.entry.set_text(text)
+	def get_label(self):
+		return self.label.get_text()
+	def set_label(self, text):
+		return self.label.set_text(text)
+	def choose(self, btn, action):
+		f = choose_dialog(action, folder=os.path.dirname(self.get_text()), filename=os.path.basename(self.get_text()))
+		if f is not None:
+			self.set_text(f)
+
+class ScrolledTextView(gtk.ScrolledWindow):
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self.TextView = gtk.TextView()
+		self.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+		self.set_shadow_type(gtk.SHADOW_IN)
+		self.add(self.TextView)
+		self.TextView.set_editable(True)
+		self.TextView.set_wrap_mode(gtk.WRAP_NONE)
+		self.TextView.modify_font(pango.FontDescription('monospace'))
+		for attr, val in gtk.TextView.__dict__.iteritems():
+			# make TextView class methods inherited
+			if not hasattr(self, attr) and callable(val):
+					self.__dict__[attr] = functools.partial(val, self.TextView)
+
 
 
 def act_button(func):
@@ -664,6 +710,7 @@ def new_download(start=True):
 	uniq = {}
 	for url in bufr_urls.get_text(bufr_urls.get_start_iter(), bufr_urls.get_end_iter(), True).split():
 		if not uniq.has_key(url):
+			# TODO parameters
 			uniq[url] = start_new_download(url, start=start)
 	win_newdl.hide()
 	main_selection.unselect_all()
@@ -710,7 +757,7 @@ args = argparser.parse_args()
 
 gtk.gdk.threads_init()
 mkdir(CacheFolder)
-# FIXME initiate list of downloads
+# TODO initiate list of downloads
 
 
 ### Build GUI ###
@@ -844,16 +891,17 @@ win_newdl = gtk.Window()
 box_newdl = gtk.VBox()
 note = gtk.Notebook()
 page1 = gtk.VBox()
-p1b1 = gtk.HBox()
+p1x1 = gtk.HBox()
 lbl_urls = gtk.Label(_("URLs"))
-scr_urls = gtk.ScrolledWindow()
-txv_urls = gtk.TextView()
+txv_urls = ScrolledTextView()
 bufr_urls = txv_urls.get_buffer()
-p1b2 = gtk.HBox()
-lbl_dir = gtk.Label(_("Select a Folder"))
-ent_dir = gtk.Entry()
-btn_dir = StockButton(label='', stock=gtk.STOCK_OPEN)
+p1x2 = gtk.HBox()
+p1c1 = FileChooserEntry(label=_("Select a Folder"), action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 page2 = gtk.VBox()
+p2x1 = gtk.VBox()
+p2c1 = FileChooserEntry(label=_("Cookie file"), action=gtk.FILE_CHOOSER_ACTION_OPEN)
+p2l1 = gtk.Label(_("Type custom Cookies here in NAME=VALUE format:"))
+p2t1 = ScrolledTextView()
 page3 = gtk.VBox()
 page4 = gtk.VBox()
 btns_newdl = gtk.HBox(homogeneous=True)
@@ -867,14 +915,8 @@ win_newdl.set_modal(True)
 win_newdl.connect('delete-event', lambda w,e: w.hide() or True)
 lbl_urls.set_alignment(0, 0)
 lbl_urls.set_padding(4, 5)
-scr_urls.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-scr_urls.set_shadow_type(gtk.SHADOW_IN)
-txv_urls.set_editable(True)
-txv_urls.set_wrap_mode(gtk.WRAP_NONE)
-txv_urls.modify_font(pango.FontDescription('monospace'))
-lbl_dir.set_alignment(0, 0)
-lbl_dir.set_padding(4, 5)
-btn_dir.connect('clicked', act_select_target_folder)
+p2l1.set_alignment(0, 0)
+p2l1.set_padding(4, 5)
 btn_new_ok.connect('clicked', lambda b: new_download())
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
@@ -886,14 +928,15 @@ note.append_page(page1, gtk.Label(_("Source")))
 note.append_page(page2, gtk.Label(_("Cookies")))
 note.append_page(page3, gtk.Label(_("POST")))
 note.append_page(page4, gtk.Label(_("Advanced")))
-page1.pack_start(p1b1, 0, 1)
-p1b1.pack_start(lbl_urls, 0, 1)
-p1b1.pack_start(scr_urls, 1, 1)
-scr_urls.add(txv_urls)
-page1.pack_start(p1b2, 0, 1)
-p1b2.pack_start(lbl_dir, 0, 1)
-p1b2.pack_start(ent_dir, 1, 1)
-p1b2.pack_start(btn_dir, 0, 1)
+page1.pack_start(p1x1, 1, 1)
+p1x1.pack_start(lbl_urls, 0, 1)
+p1x1.pack_start(txv_urls, 1, 1)
+page1.pack_start(p1x2, 0, 1)
+p1x2.pack_start(p1c1, 0, 1)
+page2.pack_start(p2x1, 1, 1)
+p2x1.pack_start(p2c1, 0, 1)
+p2x1.pack_start(p2l1, 0, 1)
+p2x1.pack_start(p2t1, 1, 1)
 box_newdl.pack_start(btns_newdl, 0, 1)
 btns_newdl.pack_start(btn_new_ok, 0, 0)
 btns_newdl.pack_start(btn_new_queue, 0, 0)
