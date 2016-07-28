@@ -230,6 +230,8 @@ def load_toolitems(toolbar, toolitems):
 		items.append(tbi)
 	return items
 
+## OS functions
+
 def mkdir(d):
 	p = os.path.dirname(d)
 	if not os.path.exists(p):
@@ -253,6 +255,24 @@ def delete(f, warn=True):
 			display_error(e)
 			return False
 	return True
+
+def run_detached(cmd, args):
+	args = args[:]
+	args.insert(0, os.path.basename(cmd))
+	pid1 = os.fork()
+	if pid1 == 0:
+		os.closerange(0, 255)
+		pid2 = os.fork()
+		if pid2 == 0:
+			try:
+				os.execvp(cmd, args)
+			except OSError:
+				pass
+			os._exit(127)
+		else:
+			os._exit(0)
+	else:
+		os.waitpid(pid1, 0)
 
 
 ### Private methods ###
@@ -421,13 +441,11 @@ class Download(object):
 			self.lastline = line
 			if refresh:
 				refresh_download_state(self['pid'])
-		print "exit loop"
 		fh.close()
 		self.running = False
 		self['status'] = S_ERR
 		refresh_download_state(self['pid'])
 		self['pid'] = None
-		print "quit loop"
 	def stop(self):
 		if self['pid'] is not None:
 			try:
@@ -440,9 +458,11 @@ class Download(object):
 
 def win_main_show():
 	if args.URL:
+		main_selection.unselect_all()
 		for url in args.URL:
 			# TODO set parameters
-			start_new_download(url)
+			it = start_new_download(url)
+			main_selection.select_iter(it)
 
 def next_logfile():
 	n = len(os.listdir(CacheFolder))
@@ -497,7 +517,7 @@ def refresh_download_state(pid, it0=None):
 			row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
 			
 			# if the current download is selected, then refresh toolbuttons sensitivity
-			if DownLoadList.get_path(it) in main_selection.get_selected_rows()[1]:
+			if main_selection.iter_is_selected(it):
 				gtk.threads_enter()
 				on_selection_change(main_selection)
 				gtk.threads_leave()
@@ -514,6 +534,7 @@ def start_new_download(url, start=True):
 	dl.iterator = it
 	if start:
 		dl.start()
+	return it
 
 
 ### Interface procedures ###
@@ -544,10 +565,12 @@ def act_options():
 
 
 def act_open_file(it, dl):
-	pass
+	if dl.outfile is not None:
+		run_detached('mimeopen-gui', [dl.outfile])
 
 def act_open_folder(it, dl):
-	pass
+	if dl.target_dir is not None:
+		run_detached('mimeopen-gui', [dl.target_dir])
 
 def act_start(it, dl):
 	dl.start()
@@ -585,8 +608,10 @@ def act_props(it, dl):
 
 
 def act_on_selection(func):
+	iters = []
 	for itpath in main_selection.get_selected_rows()[1]:
-		it = DownLoadList.get_iter(itpath)
+		iters.append(DownLoadList.get_iter(itpath))
+	for it in iters:
 		func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
@@ -606,17 +631,15 @@ def on_context_menu(menuitem, function):
 	return True
 
 def on_treeview_click(tree, event):
-	if event.button == 3:
-		x = int(event.x)
-		y = int(event.y)
-		pathinfo = main_list.get_path_at_pos(x, y)
-		if pathinfo is not None:
-			path, col, cellx, celly = pathinfo
-			main_list.grab_focus()
-			main_list.set_cursor(path, col, 0)
-			it = DownLoadList.get_iter(path)
+	if any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META']):
+		return False
+	pathinfo = main_list.get_path_at_pos(int(event.x), int(event.y))
+	if pathinfo is not None:
+		path, col, cellx, celly = pathinfo
+		it = DownLoadList.get_iter(path)
+		dl = DownLoadList[it][COL_DLOBJ]
+		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
 			ContextMenu.set_data('iterator', it)
-			dl = DownLoadList[it][COL_DLOBJ]
 			cmi_open.set_sensitive(dl.completed)
 			cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
 			cmi_refetch.set_sensitive(not dl.running)
@@ -624,7 +647,11 @@ def on_treeview_click(tree, event):
 			cmi_pause.set_sensitive(dl.running)
 			cmi_clear.set_sensitive(not dl.running)
 			ContextMenu.popup(None, None, None, event.button, event.time)
-		return True
+			return True
+		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
+			act_open_file(it, dl)
+			return True
+	return False
 
 
 ## New download window
@@ -637,9 +664,11 @@ def new_download(start=True):
 	uniq = {}
 	for url in bufr_urls.get_text(bufr_urls.get_start_iter(), bufr_urls.get_end_iter(), True).split():
 		if not uniq.has_key(url):
-			uniq[url] = True
-			start_new_download(url, start=start)
+			uniq[url] = start_new_download(url, start=start)
 	win_newdl.hide()
+	main_selection.unselect_all()
+	for it in uniq.itervalues():
+		main_selection.select_iter(it)
 
 
 ### Main ###
