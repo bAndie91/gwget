@@ -16,6 +16,7 @@ import xattr
 import threading
 import time
 import functools
+from urllib import urlencode
 
 
 def act_quit():
@@ -154,8 +155,14 @@ class ScrolledTextView(gtk.ScrolledWindow):
 		self.TextView.modify_font(pango.FontDescription('monospace'))
 		for attr, val in gtk.TextView.__dict__.iteritems():
 			# make TextView class methods inherited
-			if not hasattr(self, attr) and callable(val):
+			if not attr.startswith('_') and not hasattr(self, attr) and callable(val):
 				self.__dict__[attr] = functools.partial(val, self.TextView)
+	def get_text(self):
+		bufr = self.TextView.get_buffer()
+		return bufr.get_text(bufr.get_start_iter(), bufr.get_end_iter(), True)
+	def set_text(self, text):
+		bufr = self.TextView.get_buffer()
+		return bufr.set_text(text)
 
 
 
@@ -328,13 +335,11 @@ def run_detached(cmd, args):
 ### Private methods ###
 
 class Download(object):
-	def __init__(self, url, params=[], retries=1, target_dir='.'):
+	def __init__(self, url, params={}):
 		self.original_url = url
 		self.params = params
 		self.progress_type = 'bar:force'
 		#self.progress_type = 'dot:default'
-		self.retries = retries
-		self.target_dir = target_dir
 		self.logfile = None
 		self.outfile = None
 		self.Lock = threading.Lock()
@@ -373,10 +378,14 @@ class Download(object):
 		pid = os.fork()
 		if pid == 0:
 			os.putenv('LANG', 'C')
-			#os.putenv('http_proxy', )
+			if self.params.has_key('proxy_url'):
+				proxy = self.params['proxy_url']
+				os.putenv('http_proxy', proxy)
+				os.putenv('https_proxy', proxy)
+				os.putenv('ftp_proxy', proxy)
 			os.close(reader)
 			os.dup2(writer, sys.stdout.fileno())
-			os.dup2(writer, sys.stderr.fileno())
+#TEST			os.dup2(writer, sys.stderr.fileno())
 			sys.stdin.close()
 			os.closerange(3, 255)
 			os.execvp('wget', ['wget'] + args)
@@ -393,9 +402,23 @@ class Download(object):
 		if not delete(self.logfile, warn=False):
 			return
 		
-		wget_args = self.params + ['--output-file', self.logfile, '--adjust-extension', \
-		  '--content-disposition', '--background', '--continue', '--tries', str(self.retries), \
-		  '--directory-prefix', self.target_dir, '--verbose', '--progress', self.progress_type]
+		wget_args = []
+		for k, v in self.params.iteritems():
+			if k.startswith('-'):
+				if hasattr(v, '__iter__'):
+					for v1 in v:
+						wget_args.append(k)
+						wget_args.append(v)
+				else:
+					if k.startswith('--') and v is False:
+						k = '--no-' + k[2:]
+					wget_args.append(k)
+					if v is not True and v is not False and v is not None:
+						wget_args.append(v)
+		wget_args += ['--verbose', '--output-file', self.logfile, \
+		  '--background', '--continue', '--progress', self.progress_type, \
+		  '--adjust-extension', '--content-disposition', '--retry-connrefused', \
+		  '--auth-no-challenge']
 		wget_args.append(self.original_url)
 		try:
 			readhandle = self.spawn_wget(wget_args)
@@ -410,9 +433,12 @@ class Download(object):
 			if m_pid:
 				self['pid'] = int(m_pid.group(1))
 				break
-		t = threading.Thread(target=self.watch_log, args=())
-		t.daemon = True
-		t.start()
+		if self['pid']:
+			t = threading.Thread(target=self.watch_log, args=())
+			t.daemon = True
+			t.start()
+		else:
+			self['status'] = S_ERR
 	def wget_running(self):
 		if self['pid'] is not None:
 			try:
@@ -507,12 +533,10 @@ class Download(object):
 
 
 def win_main_show():
+	# TODO load cached downloads from logs
 	if args.URL:
-		main_selection.unselect_all()
-		for url in args.URL:
-			# TODO set parameters
-			it = start_new_download(url)
-			main_selection.select_iter(it)
+		# TODO open new download window and set urls
+		pass
 
 def next_logfile():
 	n = len(os.listdir(CacheFolder))
@@ -578,8 +602,8 @@ def pulse_download(pid):
 		if dl['pid'] == pid:
 			DownLoadList[it][COL_PULSE] += 1
 
-def start_new_download(url, start=True):
-	dl = Download(url)
+def start_new_download(url, params, start=True):
+	dl = Download(url, params)
 	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, '', 0, 0, gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
 	dl.iterator = it
 	if start:
@@ -590,7 +614,8 @@ def start_new_download(url, start=True):
 ### Interface procedures ###
 
 def act_new():
-	bufr_urls.set_text('')
+	txv_urls.set_text('')
+	# TODO clear fields
 	win_newdl.show_all()
 	note.set_current_page(0)
 	txv_urls.grab_focus()
@@ -619,8 +644,10 @@ def act_open_file(it, dl):
 		run_detached('mimeopen-gui', [dl.outfile])
 
 def act_open_folder(it, dl):
-	if dl.target_dir is not None:
-		run_detached('mimeopen-gui', [dl.target_dir])
+	for n in range(len(dl.params)):
+		if dl.params[n] == '--directory-prefix':
+			run_detached('mimeopen-gui', [dl.params[n+1]])
+			break
 
 def act_start(it, dl):
 	dl.start()
@@ -705,18 +732,20 @@ def on_treeview_click(tree, event):
 
 
 ## New download window
-def act_select_target_folder(x):
-	f = choose_folder(ent_dir.get_text())
-	if f is not None:
-		ent_dir.set_text(f)
-
 def new_download(start=True):
+	params = {}
+	for flag, wdg, getter in ParamWidgets:
+		data = wdg.get_text()
+		if getter is not None:
+			data = getter(data)
+		params[flag] = data
+	
 	main_selection.unselect_all()
 	uniq = {}
-	for url in bufr_urls.get_text(bufr_urls.get_start_iter(), bufr_urls.get_end_iter(), True).split():
+	for url in txv_urls.get_text().split():
 		if not uniq.has_key(url):
 			# TODO parameters
-			uniq[url] = it = start_new_download(url, start=start)
+			uniq[url] = it = start_new_download(url, params, start=start)
 			main_selection.select_iter(it)
 	win_newdl.hide()
 
@@ -746,6 +775,7 @@ StatusIcon = {
 	S_ERR: gtk.STOCK_NO,
 	S_STOP: gtk.STOCK_MEDIA_PAUSE,
 }
+ParamWidgets = []
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--stdin', help=_(""))
@@ -898,9 +928,8 @@ page1 = gtk.VBox()
 p1x1 = gtk.HBox()
 lbl_urls = gtk.Label(_("URLs"))
 txv_urls = ScrolledTextView()
-bufr_urls = txv_urls.get_buffer()
 p1x2 = gtk.HBox()
-p1c1 = FileChooserEntry(label=_("Select a Folder"), init=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+p1c1 = ent_target_dir = FileChooserEntry(label=_("Select a Folder"), init=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 page2 = gtk.VBox()
 p2x1 = gtk.VBox()
 p2c1 = FileChooserEntry(label=_("Cookie file"), action=gtk.FILE_CHOOSER_ACTION_OPEN)
@@ -928,6 +957,11 @@ p3l1.set_padding(4, 5)
 btn_new_ok.connect('clicked', lambda b: new_download())
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
+
+ParamWidgets.append(('--directory-prefix', p1c1, None))
+ParamWidgets.append(('--load-cookies', p2c1, None))
+ParamWidgets.append(('--header', p2t1, lambda x: map(lambda k: 'Cookie: ' + k, filter(lambda k: len(k), x.split('\n'))) ))
+ParamWidgets.append(('--post-data', p3t1, lambda x: urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), x.split('\n'))))) ))
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
