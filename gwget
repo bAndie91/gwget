@@ -19,10 +19,6 @@ import functools
 from urllib import urlencode
 
 
-def act_quit():
-	gtk.main_quit()
-	return False
-
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
 	key, modifier = gtk.accelerator_parse(keyname)
@@ -47,7 +43,7 @@ def display_error(e):
 class DialogCancel(Exception):
 	pass
 
-def question(msg, yes=None, parent=None, cancelable=False):
+def question(msg, yes=None, parent=None, cancelable=False, default=gtk.RESPONSE_YES):
 	dlg = gtk.MessageDialog(parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_NONE)
 	dlg.set_markup(msg)
 	dlg.set_title(_("Question"))
@@ -64,6 +60,7 @@ def question(msg, yes=None, parent=None, cancelable=False):
 	if cancelable:
 		dlg.add_buttons(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL)
 		add_key_binding(dlg, 'Escape', lambda a,b,c,d: dlg.response(gtk.RESPONSE_CANCEL) or True)
+	dlg.set_default_response(default)
 	resp = dlg.run()
 	dlg.destroy()
 	if resp == gtk.RESPONSE_CANCEL:
@@ -83,7 +80,7 @@ def create_choose_dialog(action, path=None, init=None):
 	if action in [gtk.FILE_CHOOSER_ACTION_OPEN, gtk.FILE_CHOOSER_ACTION_SAVE] and path is not None:
 		dlg.set_filename(path)
 	else:
-		dlg.set_current_folder(path or LastFolder)
+		dlg.set_current_folder(path or Var.LastFolder)
 	if init is not None:
 		dlg.set_current_name(init)
 	btn_cwd = StockButton(label=_("Working Dir"), stock=gtk.STOCK_JUMP_TO)
@@ -104,7 +101,7 @@ def choose_dialog(action, path=None, init=None):
 			dlg.set_current_folder(os.getcwd())
 		else:
 			break
-	LastFolder = dlg.get_current_folder()
+	Var.LastFolder = dlg.get_current_folder()
 	dlg.destroy()
 	return selected
 
@@ -163,7 +160,22 @@ class ScrolledTextView(gtk.ScrolledWindow):
 	def set_text(self, text):
 		bufr = self.TextView.get_buffer()
 		return bufr.set_text(text)
+	def grab_focus(self):
+		return self.TextView.grab_focus()
 
+class LabelledEntry(gtk.HBox):
+	def __init__(self, label='', spacing=2):
+		super(self.__class__, self).__init__(spacing=spacing)
+		self.Label = gtk.Label(label)
+		self.Entry = gtk.Entry()
+		self.Label.set_alignment(0, 0)
+		self.Label.set_padding(4, 5)
+		self.pack_start(self.Label, 0, 1)
+		self.pack_start(self.Entry, 1, 1)
+		for cname in 'Entry', 'Label':
+			for attr, val in getattr(gtk, cname).__dict__.iteritems():
+				if not attr.startswith('_') and not hasattr(self, attr) and callable(val):
+					self.__dict__[attr] = functools.partial(val, getattr(self, cname))
 
 
 def act_button(func):
@@ -331,6 +343,19 @@ def run_detached(cmd, args):
 	else:
 		os.waitpid(pid1, 0)
 
+class Readlines(object):
+	def __init__(self, handle):
+		self.handle = handle
+	def __iter__(self):
+		return self
+	def next(self):
+		s = self.handle.readline()
+		if s == '':
+			raise StopIteration
+		return s
+	def __del__(self):
+		pass
+
 
 ### Private methods ###
 
@@ -385,7 +410,7 @@ class Download(object):
 				os.putenv('ftp_proxy', proxy)
 			os.close(reader)
 			os.dup2(writer, sys.stdout.fileno())
-#TEST			os.dup2(writer, sys.stderr.fileno())
+			os.dup2(writer, sys.stderr.fileno())
 			sys.stdin.close()
 			os.closerange(3, 255)
 			os.execvp('wget', ['wget'] + args)
@@ -396,7 +421,7 @@ class Download(object):
 		if self['pid'] is not None:
 			return
 		self.init()
-		refresh_download_state(None, self.iterator)
+		refresh_download_state(self)
 		if self.logfile is None:
 			self.logfile = next_logfile()
 		if not delete(self.logfile, warn=False):
@@ -408,13 +433,17 @@ class Download(object):
 				if hasattr(v, '__iter__'):
 					for v1 in v:
 						wget_args.append(k)
-						wget_args.append(v)
+						wget_args.append(v1)
 				else:
 					if k.startswith('--') and v is False:
 						k = '--no-' + k[2:]
 					wget_args.append(k)
 					if v is not True and v is not False and v is not None:
 						wget_args.append(v)
+			elif k == '':
+				# append custom options
+				for v1 in v:
+					wget_args.append(v1)
 		wget_args += ['--verbose', '--output-file', self.logfile, \
 		  '--background', '--continue', '--progress', self.progress_type, \
 		  '--adjust-extension', '--content-disposition', '--retry-connrefused', \
@@ -427,18 +456,22 @@ class Download(object):
 			return
 		
 		self['status'] = S_INIT
-		refresh_download_state(None, self.iterator)
-		for line in readhandle.readlines():
+		# TODO readlines into thread
+		for line in Readlines(readhandle):
+			line = line.strip()
+			self.lastline = line
 			m_pid = re.search('pid (\d+)', line)
 			if m_pid:
 				self['pid'] = int(m_pid.group(1))
 				break
+		readhandle.close()
 		if self['pid']:
 			t = threading.Thread(target=self.watch_log, args=())
 			t.daemon = True
 			t.start()
 		else:
 			self['status'] = S_ERR
+		refresh_download_state(self)
 	def wget_running(self):
 		if self['pid'] is not None:
 			try:
@@ -516,12 +549,12 @@ class Download(object):
 				refresh = True
 			self.lastline = line
 			if refresh:
-				refresh_download_state(self['pid'])
+				refresh_download_state(self)
 		fh.close()
 		self.running = False
 		self['status'] = S_ERR
-		refresh_download_state(self['pid'])
 		self['pid'] = None
+		refresh_download_state(self)
 	def stop(self):
 		if self['pid'] is not None:
 			try:
@@ -533,43 +566,50 @@ class Download(object):
 
 
 def win_main_show():
+	btn_remove.hide()
 	# TODO load cached downloads from logs
 	if args.URL:
 		# TODO open new download window and set urls
 		pass
 
+def act_quit():
+	if any(DownLoadList[it][COL_DLOBJ].running for it in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
+		return True
+	gtk.main_quit()
+	return False
+
 def next_logfile():
 	n = len(os.listdir(CacheFolder))
 	f = 'gwget.' + str(n)
-	while os.path.exists(os.path.join(CacheFolder, f)):
+	while os.path.exists(os.path.join(CacheFolder, f)) or any(f == os.path.basename(DownLoadList[it][COL_DLOBJ].logfile or '') for it in iter_downloadlist()):
 		n += 1
 		f = 'gwget.' + str(n)
 	return os.path.join(CacheFolder, f)
 
 class iter_downloadlist(object):
-	def __init__(self, rit=False):
-		self.rit = rit
-	def __iter__(self):
+	def __init__(self):
 		self.model = DownLoadList
-		self.iter = self.model.get_iter_first()
+		self.cur_iter = self.model.get_iter_first()
+	def __iter__(self):
 		return self
 	def next(self):
-		if self.iter is None:
+		if self.cur_iter is None:
 			raise StopIteration
-		if self.rit:
-			ret = (self.model[self.iter][COL_DLOBJ], self.iter)
-		else:
-			ret = self.model[self.iter][COL_DLOBJ]
-		self.iter = self.model.iter_next(self.iter)
+		ret = self.cur_iter
+		self.cur_iter = self.model.iter_next(self.cur_iter)
 		return ret
 	def __del__(self):
 		pass
 
-def refresh_download_state(pid, it0=None):
-	for dl, it in iter_downloadlist(True):
-		if (pid is not None and dl['pid'] == pid) or (it0 is not None and it == it0):
-			row = DownLoadList[it]
-			row[COL_NAME] = os.path.basename(dl.outfile or '')
+def refresh_download_state(dlobj):
+	if threading.currentThread().name != 'MainThread':
+		gtk.threads_enter()
+	for it in iter_downloadlist():
+		row = DownLoadList[it]
+		dl = row[COL_DLOBJ]
+		if dl == dlobj:
+			if dl.outfile is not None:
+				row[COL_NAME] = os.path.basename(dl.outfile)
 			if dl.percent >= 0:
 				row[COL_PULSE] = -1
 				row[COL_PERCENT] = dl.percent
@@ -592,20 +632,19 @@ def refresh_download_state(pid, it0=None):
 			
 			# if the current download is selected, then refresh toolbuttons sensitivity
 			if main_selection.iter_is_selected(it):
-				gtk.threads_enter()
 				on_selection_change(main_selection)
-				gtk.threads_leave()
 			break
+	if threading.currentThread().name != 'MainThread':
+		gtk.threads_leave()
 
 def pulse_download(pid):
-	for dl, it in iter_downloadlist(True):
-		if dl['pid'] == pid:
+	for it in iter_downloadlist():
+		if DownLoadList[it][COL_DLOBJ]['pid'] == pid:
 			DownLoadList[it][COL_PULSE] += 1
 
 def start_new_download(url, params, start=True):
 	dl = Download(url, params)
 	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, '', 0, 0, gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
-	dl.iterator = it
 	if start:
 		dl.start()
 	return it
@@ -614,24 +653,28 @@ def start_new_download(url, params, start=True):
 ### Interface procedures ###
 
 def act_new():
-	txv_urls.set_text('')
+	p1t1.set_text('')
 	# TODO clear fields
 	win_newdl.show_all()
-	note.set_current_page(0)
-	txv_urls.grab_focus()
+	for n in reversed(range(0, note.get_n_pages())):
+		note.set_current_page(n)
+	p1t1.grab_focus()
 
 def act_start_all():
-	for dl in iter_downloadlist():
+	for it in iter_downloadlist():
+		dl = DownLoadList[it][COL_DLOBJ]
 		if not dl.running:
 			act_start(None, dl)
 
 def act_pause_all():
-	for dl in iter_downloadlist():
+	for it in iter_downloadlist():
+		dl = DownLoadList[it][COL_DLOBJ]
 		if dl.running:
 			act_pause(None, dl)
 
 def act_clear_completed():
-	for dl, it in iter_downloadlist(True):
+	for it in iter_downloadlist():
+		dl = DownLoadList[it][COL_DLOBJ]
 		if dl.completed:
 			act_clear_download(it, dl)
 
@@ -662,18 +705,19 @@ def act_pause(it, dl):
 
 def act_remove_download(it, dl, force=False):
 	if not dl.running and dl.outfile is not None:
-		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?"), yes=gtk.STOCK_DELETE):
+		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?"), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
 def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> download?"), yes=gtk.STOCK_DELETE, cancelable=True):
+				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> download?"), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
-		delete(dl.logfile)
+		if dl.logfile is not None:
+			delete(dl.logfile)
 		del DownLoadList[it]
 
 def act_show_log(it, dl):
@@ -732,19 +776,21 @@ def on_treeview_click(tree, event):
 
 
 ## New download window
-def new_download(start=True):
+def new_download(start=True, open=False):
 	params = {}
 	for flag, wdg, getter in ParamWidgets:
 		data = wdg.get_text()
 		if getter is not None:
 			data = getter(data)
-		params[flag] = data
+		if data:
+			params[flag] = data
+	if open:
+		params['on_complete'] = 'mimeopen-gui %s'
 	
 	main_selection.unselect_all()
 	uniq = {}
-	for url in txv_urls.get_text().split():
+	for url in p1t1.get_text().split():
 		if not uniq.has_key(url):
-			# TODO parameters
 			uniq[url] = it = start_new_download(url, params, start=start)
 			main_selection.select_iter(it)
 	win_newdl.hide()
@@ -755,9 +801,11 @@ def new_download(start=True):
 
 PROGNAME = 'gwget'
 _ = gettext.gettext
-LastFolder = os.getcwd()
+class Var(object): pass
+Var.LastFolder = os.getcwd()
 XATTR_CHARSET = 'user.mime_encoding'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
+COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(10)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP = range(6)
 Status = {
 	S_QUEUE: "Queued",
@@ -779,10 +827,10 @@ ParamWidgets = []
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--stdin', help=_(""))
-argparser.add_argument('--proxy', metavar='URL', help=_(""))
-argparser.add_argument('--auth', metavar='USER:PASS', help=_(""))
 argparser.add_argument('--cookie', metavar='NAME=STRING;NAME=STRING;...', help=_(""))
 argparser.add_argument('--cookie-jar', metavar='FILE', help=_(""))
+argparser.add_argument('--auth', metavar='USER:PASS', help=_(""))
+argparser.add_argument('--proxy', metavar='URL', help=_(""))
 argparser.add_argument('--referer', metavar='URL', help=_(""))
 argparser.add_argument('--agent', metavar='STRING', help=_(""))
 argparser.add_argument('URL', nargs='*', help=_(""))
@@ -791,7 +839,6 @@ args = argparser.parse_args()
 
 gtk.gdk.threads_init()
 mkdir(CacheFolder)
-# TODO initiate list of downloads
 
 
 ### Build GUI ###
@@ -803,7 +850,6 @@ win_main = gtk.Window()
 box_main = gtk.VBox()
 main_toolbar = gtk.Toolbar()
 scroller = gtk.ScrolledWindow()
-COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(10)
 DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, str, float, int, str, str, str)
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
@@ -820,11 +866,12 @@ cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
 
 
 # Configure main window's widgets
-win_main.set_default_size(800, 450)
+win_main.set_default_size(950, 450)
 start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
 win_main.connect('delete-event', lambda w,e: act_quit())
 add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
 add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
+add_key_binding(win_main, '<Control>p', lambda a,b,c,d: act_pause_all())
 add_key_binding(win_main, '<Control>o', lambda a,b,c,d: act_options())
 
 toolbuttons = [
@@ -926,21 +973,38 @@ box_newdl = gtk.VBox()
 note = gtk.Notebook()
 page1 = gtk.VBox()
 p1x1 = gtk.HBox()
-lbl_urls = gtk.Label(_("URLs"))
-txv_urls = ScrolledTextView()
-p1x2 = gtk.HBox()
-p1c1 = ent_target_dir = FileChooserEntry(label=_("Select a Folder"), init=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+p1l1 = gtk.Label(_("URLs"))
+p1t1 = ScrolledTextView()
+p1c1 = FileChooserEntry(label=_("Select a Folder"), init=Var.LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 page2 = gtk.VBox()
 p2x1 = gtk.VBox()
 p2c1 = FileChooserEntry(label=_("Cookie file"), action=gtk.FILE_CHOOSER_ACTION_OPEN)
-p2l1 = gtk.Label(_("Type custom Cookies here per line in NAME=VALUE format:"))
+p2l1 = gtk.Label(_("Type custom Cookies per line in NAME=VALUE format:"))
 p2t1 = ScrolledTextView()
 page3 = gtk.VBox()
-p3l1 = gtk.Label(_("Type POST parameters here per line in NAME=VALUE format:\nURL encoding in not necessary."))
+p3l1 = gtk.Label(_("Type POST parameters per line in NAME=VALUE format:\nURL encoding is not necessary"))
 p3t1 = ScrolledTextView()
 page4 = gtk.VBox()
+p4x1 = gtk.HBox(spacing=2)
+p4l1a = gtk.Label(_("Attempts"))
+p4a1 = gtk.Adjustment(value=1, lower=0, upper=gobject.constants.G_MAXINT, step_incr=1, page_incr=10)
+p4s1 = gtk.SpinButton(p4a1)
+p4l1b = gtk.Label()
+p4e2 = LabelledEntry(label=_("Username"))
+p4e3 = LabelledEntry(label=_("Password"))
+p4e4 = LabelledEntry(label=_("Proxy URL"))
+p4e5 = LabelledEntry(label=_("Referer"))
+p4e6 = LabelledEntry(label=_("User Agent"))
+p4x2 = gtk.HBox(spacing=2)
+p4l2a = gtk.Label(_("Bandwidth limit"))
+p4a2 = gtk.Adjustment(value=0, lower=0, upper=gobject.constants.G_MAXINT, step_incr=1, page_incr=10)
+p4s2 = gtk.SpinButton(p4a2)
+p4l2b = gtk.Label()
+p4e7 = LabelledEntry(label=_("Custom wget(1) options"))
+p4e8 = LabelledEntry(label=_("Run on complete"))
 btns_newdl = gtk.HBox(homogeneous=True)
-btn_new_ok = StockButton(label=_("Download"), stock=gtk.STOCK_SAVE)
+btn_new_save = StockButton(label=_("Download"), stock=gtk.STOCK_SAVE)
+btn_new_open = StockButton(stock=gtk.STOCK_OPEN)
 btn_new_queue = StockButton(label=_("Queue"), stock=gtk.STOCK_ADD)
 btn_new_no = StockButton(stock=gtk.STOCK_CANCEL)
 
@@ -948,13 +1012,17 @@ btn_new_no = StockButton(stock=gtk.STOCK_CANCEL)
 win_newdl.set_transient_for(win_main)
 win_newdl.set_modal(True)
 win_newdl.connect('delete-event', lambda w,e: w.hide() or True)
-lbl_urls.set_alignment(0, 0)
-lbl_urls.set_padding(4, 5)
-p2l1.set_alignment(0, 0)
-p2l1.set_padding(4, 5)
-p3l1.set_alignment(0, 0)
-p3l1.set_padding(4, 5)
-btn_new_ok.connect('clicked', lambda b: new_download())
+for label in p1l1, p2l1, p3l1, p4l1a, p4l1b:
+	label.set_alignment(0, 0)
+	label.set_padding(4, 5)
+for spinner in p4s1, p4s2:
+	spinner.set_numeric(True)
+	spinner.set_alignment(1.0)
+p4l1b.set_markup(_("<small><i>(0 = infinite)</i></small>"))
+p4l2b.set_markup(_("kB/s <small><i>(0 = unlimited)</i></small>"))
+p4e3.set_visibility(False)
+btn_new_save.connect('clicked', lambda b: new_download())
+btn_new_open.connect('clicked', lambda b: new_download(open=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
@@ -962,16 +1030,24 @@ ParamWidgets.append(('--directory-prefix', p1c1, None))
 ParamWidgets.append(('--load-cookies', p2c1, None))
 ParamWidgets.append(('--header', p2t1, lambda x: map(lambda k: 'Cookie: ' + k, filter(lambda k: len(k), x.split('\n'))) ))
 ParamWidgets.append(('--post-data', p3t1, lambda x: urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), x.split('\n'))))) ))
+ParamWidgets.append(('--tries', p4s1, None))
+ParamWidgets.append(('--user', p4e2, None))
+ParamWidgets.append(('--password', p4e3, None))
+ParamWidgets.append(('proxy', p4e4, None))
+ParamWidgets.append(('--referer', p4e5, None))
+ParamWidgets.append(('--user-agent', p4e6, None))
+ParamWidgets.append(('--limit-rate', p4s2, lambda x: x+'k' ))
+ParamWidgets.append(('', p4e7, lambda x: x.split() ))
+ParamWidgets.append(('on_complete', p4e8, None))
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
 box_newdl.pack_start(note, 1, 1)
 note.append_page(page1, gtk.Label(_("Basic")))
 page1.pack_start(p1x1, 1, 1)
-p1x1.pack_start(lbl_urls, 0, 1)
-p1x1.pack_start(txv_urls, 1, 1)
-page1.pack_start(p1x2, 0, 1)
-p1x2.pack_start(p1c1, 1, 1)
+p1x1.pack_start(p1l1, 0, 1)
+p1x1.pack_start(p1t1, 1, 1)
+page1.pack_start(p1c1, 0, 1)
 note.append_page(page2, gtk.Label(_("Cookies")))
 page2.pack_start(p2x1, 1, 1)
 p2x1.pack_start(p2c1, 0, 1)
@@ -981,8 +1057,24 @@ note.append_page(page3, gtk.Label(_("POST")))
 page3.pack_start(p3l1, 0, 0)
 page3.pack_start(p3t1, 1, 1)
 note.append_page(page4, gtk.Label(_("Advanced")))
+page4.pack_start(p4x1, 0, 1)
+p4x1.pack_start(p4l1a, 0, 1)
+p4x1.pack_start(p4s1, 0, 1)
+p4x1.pack_start(p4l1b, 0, 1)
+page4.pack_start(p4e2, 0, 1)
+page4.pack_start(p4e3, 0, 1)
+page4.pack_start(p4e4, 0, 1)
+page4.pack_start(p4e5, 0, 1)
+page4.pack_start(p4e6, 0, 1)
+page4.pack_start(p4x2, 0, 1)
+p4x2.pack_start(p4l2a, 0, 1)
+p4x2.pack_start(p4s2, 0, 1)
+p4x2.pack_start(p4l2b, 0, 1)
+page4.pack_start(p4e7, 0, 1)
+page4.pack_start(p4e8, 0, 1)
 box_newdl.pack_start(btns_newdl, 0, 1)
-btns_newdl.pack_start(btn_new_ok, 0, 0)
+btns_newdl.pack_start(btn_new_save, 0, 0)
+btns_newdl.pack_start(btn_new_open, 0, 0)
 btns_newdl.pack_start(btn_new_queue, 0, 0)
 btns_newdl.pack_start(btn_new_no, 0, 0)
 
