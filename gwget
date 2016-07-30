@@ -80,7 +80,7 @@ def create_choose_dialog(action, path=None, init=None):
 	if action in [gtk.FILE_CHOOSER_ACTION_OPEN, gtk.FILE_CHOOSER_ACTION_SAVE] and path is not None:
 		dlg.set_filename(path)
 	else:
-		dlg.set_current_folder(path or Var.LastFolder)
+		dlg.set_current_folder(path or LastFolder)
 	if init is not None:
 		dlg.set_current_name(init)
 	btn_cwd = StockButton(label=_("Working Dir"), stock=gtk.STOCK_JUMP_TO)
@@ -101,12 +101,13 @@ def choose_dialog(action, path=None, init=None):
 			dlg.set_current_folder(os.getcwd())
 		else:
 			break
-	Var.LastFolder = dlg.get_current_folder()
+	global LastFolder
+	LastFolder = dlg.get_current_folder()
 	dlg.destroy()
 	return selected
 
-def choose_save_file(filename=None):
-	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SAVE, filename=filename)
+def choose_save_file(filename=None, init=None):
+	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SAVE, filename=filename, init=init)
 
 def choose_folder(folder=None):
 	return choose_dialog(gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER, folder=folder)
@@ -115,28 +116,28 @@ def choose_open_file(folder=None):
 	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN, folder=folder)
 
 class FileChooserEntry(gtk.HBox):
-	def __init__(self, label='', init='', action=gtk.FILE_CHOOSER_ACTION_OPEN):
+	def __init__(self, label='', path='', action=gtk.FILE_CHOOSER_ACTION_OPEN):
 		super(self.__class__, self).__init__(spacing=2)
-		self.label = gtk.Label(label)
-		self.label.set_alignment(0, 0)
-		self.label.set_padding(2, 8)
-		self.entry = gtk.Entry()
-		self.entry.set_text(init)
-		self.button = StockButton(label='', stock=gtk.STOCK_OPEN, icon_size=gtk.ICON_SIZE_MENU)
-		self.button.connect('clicked', self.choose, action)
-		self.pack_start(self.label, 0, 0)
-		self.pack_start(self.entry, 1, 1)
-		self.pack_start(self.button, 0, 0)
+		self.Label = gtk.Label(label)
+		self.Label.set_alignment(0, 0)
+		self.Label.set_padding(2, 8)
+		self.Entry = gtk.Entry()
+		self.Entry.set_text(path)
+		self.Button = StockButton(label='', stock=gtk.STOCK_OPEN, icon_size=gtk.ICON_SIZE_MENU)
+		self.Button.connect('clicked', self.choose, action)
+		self.pack_start(self.Label, 0, 0)
+		self.pack_start(self.Entry, 1, 1)
+		self.pack_start(self.Button, 0, 0)
 	def get_text(self):
-		return self.entry.get_text()
+		return self.Entry.get_text()
 	def set_text(self, text):
-		return self.entry.set_text(text)
+		return self.Entry.set_text(text)
 	def get_label(self):
-		return self.label.get_text()
+		return self.Label.get_text()
 	def set_label(self, text):
-		return self.label.set_text(text)
+		return self.Label.set_text(text)
 	def choose(self, btn, action):
-		p = choose_dialog(action, path=self.get_text())
+		p = choose_dialog(action, path=self.Entry.get_text())
 		if p is not None:
 			self.set_text(p)
 
@@ -148,6 +149,7 @@ class ScrolledTextView(gtk.ScrolledWindow):
 		self.set_shadow_type(gtk.SHADOW_IN)
 		self.add(self.TextView)
 		self.TextView.set_editable(True)
+		self.TextView.set_accepts_tab(False)
 		self.TextView.set_wrap_mode(gtk.WRAP_NONE)
 		self.TextView.modify_font(pango.FontDescription('monospace'))
 		for attr, val in gtk.TextView.__dict__.iteritems():
@@ -523,6 +525,7 @@ class Download(object):
 				refresh = True
 			if m_name2:
 				self.outfile = m_name2.group(1)
+				self.completed = True
 				refresh = True
 			if m_percent:
 				self.percent = int(m_percent.group(1))
@@ -573,7 +576,7 @@ def win_main_show():
 		pass
 
 def act_quit():
-	if any(DownLoadList[it][COL_DLOBJ].running for it in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
+	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
 		return True
 	gtk.main_quit()
 	return False
@@ -581,7 +584,7 @@ def act_quit():
 def next_logfile():
 	n = len(os.listdir(CacheFolder))
 	f = 'gwget.' + str(n)
-	while os.path.exists(os.path.join(CacheFolder, f)) or any(f == os.path.basename(DownLoadList[it][COL_DLOBJ].logfile or '') for it in iter_downloadlist()):
+	while os.path.exists(os.path.join(CacheFolder, f)) or any(f == os.path.basename(dl.logfile or '') for it, dl in iter_downloadlist()):
 		n += 1
 		f = 'gwget.' + str(n)
 	return os.path.join(CacheFolder, f)
@@ -595,7 +598,7 @@ class iter_downloadlist(object):
 	def next(self):
 		if self.cur_iter is None:
 			raise StopIteration
-		ret = self.cur_iter
+		ret= (self.cur_iter, self.model[self.cur_iter][COL_DLOBJ])
 		self.cur_iter = self.model.iter_next(self.cur_iter)
 		return ret
 	def __del__(self):
@@ -604,9 +607,8 @@ class iter_downloadlist(object):
 def refresh_download_state(dlobj):
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
-	for it in iter_downloadlist():
+	for it, dl in iter_downloadlist():
 		row = DownLoadList[it]
-		dl = row[COL_DLOBJ]
 		if dl == dlobj:
 			if dl.outfile is not None:
 				row[COL_NAME] = os.path.basename(dl.outfile)
@@ -638,8 +640,8 @@ def refresh_download_state(dlobj):
 		gtk.threads_leave()
 
 def pulse_download(pid):
-	for it in iter_downloadlist():
-		if DownLoadList[it][COL_DLOBJ]['pid'] == pid:
+	for it, dl in iter_downloadlist():
+		if dl['pid'] == pid:
 			DownLoadList[it][COL_PULSE] += 1
 
 def start_new_download(url, params, start=True):
@@ -649,32 +651,38 @@ def start_new_download(url, params, start=True):
 		dl.start()
 	return it
 
+def reset_parameters():
+	for wdg in p1t1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
+		wdg.set_text('')
+	p1s2.set_value(0)
+	p4s1.set_value(1)
 
-### Interface procedures ###
-
-def act_new():
-	p1t1.set_text('')
-	# TODO clear fields
+def show_win_newdl():
 	win_newdl.show_all()
 	for n in reversed(range(0, note.get_n_pages())):
 		note.set_current_page(n)
 	p1t1.grab_focus()
 
+
+
+### Interface procedures ###
+
+def act_new():
+	reset_parameters()
+	show_win_newdl()
+
 def act_start_all():
-	for it in iter_downloadlist():
-		dl = DownLoadList[it][COL_DLOBJ]
-		if not dl.running:
+	for it, dl in iter_downloadlist():
+		if not dl.running and not dl.completed:
 			act_start(None, dl)
 
 def act_pause_all():
-	for it in iter_downloadlist():
-		dl = DownLoadList[it][COL_DLOBJ]
+	for it, dl in iter_downloadlist():
 		if dl.running:
 			act_pause(None, dl)
 
 def act_clear_completed():
-	for it in iter_downloadlist():
-		dl = DownLoadList[it][COL_DLOBJ]
+	for it, dl in iter_downloadlist():
 		if dl.completed:
 			act_clear_download(it, dl)
 
@@ -687,10 +695,7 @@ def act_open_file(it, dl):
 		run_detached('mimeopen-gui', [dl.outfile])
 
 def act_open_folder(it, dl):
-	for n in range(len(dl.params)):
-		if dl.params[n] == '--directory-prefix':
-			run_detached('mimeopen-gui', [dl.params[n+1]])
-			break
+	run_detached('mimeopen-gui', [dl.params['--directory-prefix']])
 
 def act_start(it, dl):
 	dl.start()
@@ -712,7 +717,7 @@ def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> download?"), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
+				if question(_("This download is not completed.\nURL: <tt>%s</tt>\nWould you like to <b>delete partial</b> download?" % (glib.markup_escape_text(dl.original_url))), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
@@ -721,19 +726,30 @@ def act_clear_download(it, dl):
 		del DownLoadList[it]
 
 def act_show_log(it, dl):
-	os.system("cat %s" % dl.logfile)
+	win_log = gtk.Window()
+	txv = ScrolledTextView()
+	win_log.set_default_size(675, 345)
+	win_log.connect('delete-event', lambda w,e: w.destroy())
+	add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
+	win_log.set_transient_for(win_main)
+	win_log.set_modal(True)
+	win_log.add(txv)
+	txv.set_text(''.join(open(dl.logfile, 'r').readlines()))
+	txv.set_editable(False)
+	win_log.show_all()
 
 def act_props(it, dl):
 	print dl.__dict__
 
 
 
-def act_on_selection(func):
+def act_on_selection(func, maxi=None):
 	iters = []
 	for itpath in main_selection.get_selected_rows()[1]:
 		iters.append(DownLoadList.get_iter(itpath))
-	for it in iters:
-		func(it, DownLoadList[it][COL_DLOBJ])
+	if maxi is None or len(iters) <= maxi:
+		for it in iters:
+			func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
 	iters = map(lambda p: DownLoadList.get_iter(p), selection.get_selected_rows()[1])
@@ -751,8 +767,11 @@ def on_context_menu(menuitem, function):
 	function(it, dl)
 	return True
 
+def event_masked(event):
+	return any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META'])
+
 def on_treeview_click(tree, event):
-	if any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META']):
+	if event_masked(event):
 		return False
 	pathinfo = main_list.get_path_at_pos(int(event.x), int(event.y))
 	if pathinfo is not None:
@@ -760,8 +779,10 @@ def on_treeview_click(tree, event):
 		it = DownLoadList.get_iter(path)
 		dl = DownLoadList[it][COL_DLOBJ]
 		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
+			main_selection.unselect_all()
+			main_selection.select_iter(it)
 			ContextMenu.set_data('iterator', it)
-			cmi_open.set_sensitive(dl.completed)
+			cmi_open.set_sensitive(dl.outfile is not None)
 			cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
 			cmi_refetch.set_sensitive(not dl.running)
 			cmi_resume.set_sensitive(not dl.running and not dl.completed)
@@ -772,6 +793,14 @@ def on_treeview_click(tree, event):
 		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
 			act_open_file(it, dl)
 			return True
+	return False
+
+def on_treeview_key(tree, event):
+	if event_masked(event):
+		return False
+	if event.keyval == gtk.gdk.keyval_from_name('Delete'):
+		act_on_selection(act_clear_download)
+		return True
 	return False
 
 
@@ -801,8 +830,7 @@ def new_download(start=True, open=False):
 
 PROGNAME = 'gwget'
 _ = gettext.gettext
-class Var(object): pass
-Var.LastFolder = os.getcwd()
+LastFolder = os.getcwd()
 XATTR_CHARSET = 'user.mime_encoding'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
 COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(10)
@@ -869,10 +897,13 @@ cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
 win_main.set_default_size(950, 450)
 start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
 win_main.connect('delete-event', lambda w,e: act_quit())
-add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
 add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
-add_key_binding(win_main, '<Control>p', lambda a,b,c,d: act_pause_all())
+add_key_binding(win_main, '<Control>r', lambda a,b,c,d: act_start_all())
+add_key_binding(win_main, '<Control>k', lambda a,b,c,d: act_pause_all())
+add_key_binding(win_main, '<Control>l', lambda a,b,c,d: act_on_selection(act_show_log, 1))
+add_key_binding(win_main, '<Control>p', lambda a,b,c,d: act_on_selection(act_props, 1))
 add_key_binding(win_main, '<Control>o', lambda a,b,c,d: act_options())
+add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
 
 toolbuttons = [
 	(None, gtk.STOCK_NEW, None, act_new),
@@ -932,6 +963,7 @@ main_list.set_rules_hint(True)
 main_list.set_headers_clickable(True)
 main_list.set_reorderable(True)
 main_list.connect('button-press-event', on_treeview_click)
+main_list.connect('key-press-event', on_treeview_key)
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
 cmi_open.connect('activate', on_context_menu, act_open_file)
@@ -975,7 +1007,12 @@ page1 = gtk.VBox()
 p1x1 = gtk.HBox()
 p1l1 = gtk.Label(_("URLs"))
 p1t1 = ScrolledTextView()
-p1c1 = FileChooserEntry(label=_("Select a Folder"), init=Var.LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+p1c1 = FileChooserEntry(label=_("Select a Folder"), path=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+p1x2 = gtk.HBox(spacing=2)
+p1l2a = gtk.Label(_("Bandwidth limit"))
+p1a2 = gtk.Adjustment(value=0, lower=0, upper=gobject.constants.G_MAXINT, step_incr=1, page_incr=10)
+p1s2 = gtk.SpinButton(p1a2)
+p1l2b = gtk.Label()
 page2 = gtk.VBox()
 p2x1 = gtk.VBox()
 p2c1 = FileChooserEntry(label=_("Cookie file"), action=gtk.FILE_CHOOSER_ACTION_OPEN)
@@ -995,14 +1032,9 @@ p4e3 = LabelledEntry(label=_("Password"))
 p4e4 = LabelledEntry(label=_("Proxy URL"))
 p4e5 = LabelledEntry(label=_("Referer"))
 p4e6 = LabelledEntry(label=_("User Agent"))
-p4x2 = gtk.HBox(spacing=2)
-p4l2a = gtk.Label(_("Bandwidth limit"))
-p4a2 = gtk.Adjustment(value=0, lower=0, upper=gobject.constants.G_MAXINT, step_incr=1, page_incr=10)
-p4s2 = gtk.SpinButton(p4a2)
-p4l2b = gtk.Label()
 p4e7 = LabelledEntry(label=_("Custom wget(1) options"))
 p4e8 = LabelledEntry(label=_("Run on complete"))
-btns_newdl = gtk.HBox(homogeneous=True)
+btns_newdl = gtk.HBox(spacing=5)
 btn_new_save = StockButton(label=_("Download"), stock=gtk.STOCK_SAVE)
 btn_new_open = StockButton(stock=gtk.STOCK_OPEN)
 btn_new_queue = StockButton(label=_("Queue"), stock=gtk.STOCK_ADD)
@@ -1012,21 +1044,25 @@ btn_new_no = StockButton(stock=gtk.STOCK_CANCEL)
 win_newdl.set_transient_for(win_main)
 win_newdl.set_modal(True)
 win_newdl.connect('delete-event', lambda w,e: w.hide() or True)
-for label in p1l1, p2l1, p3l1, p4l1a, p4l1b:
+add_key_binding(win_newdl, 'Escape', lambda a,b,c,d: win_newdl.hide() or True)
+add_key_binding(win_newdl, '<Control>Return', lambda a,b,c,d: new_download() or True)
+add_key_binding(win_newdl, '<Control><Shift>Return', lambda a,b,c,d: new_download(start=False) or True)
+for label in p1l1, p2l1, p1l2a, p1l2b, p3l1, p4l1a, p4l1b:
 	label.set_alignment(0, 0)
 	label.set_padding(4, 5)
-for spinner in p4s1, p4s2:
+for spinner in p1s2, p4s1:
 	spinner.set_numeric(True)
 	spinner.set_alignment(1.0)
+p1l2b.set_markup(_("kB/s <small><i>(0 = unlimited)</i></small>"))
 p4l1b.set_markup(_("<small><i>(0 = infinite)</i></small>"))
-p4l2b.set_markup(_("kB/s <small><i>(0 = unlimited)</i></small>"))
 p4e3.set_visibility(False)
+btns_newdl.set_border_width(5)
 btn_new_save.connect('clicked', lambda b: new_download())
 btn_new_open.connect('clicked', lambda b: new_download(open=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
-ParamWidgets.append(('--directory-prefix', p1c1, None))
+ParamWidgets.append(('--directory-prefix', p1c1, lambda x: x if x!='' else os.getcwd() ))
 ParamWidgets.append(('--load-cookies', p2c1, None))
 ParamWidgets.append(('--header', p2t1, lambda x: map(lambda k: 'Cookie: ' + k, filter(lambda k: len(k), x.split('\n'))) ))
 ParamWidgets.append(('--post-data', p3t1, lambda x: urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), x.split('\n'))))) ))
@@ -1036,7 +1072,7 @@ ParamWidgets.append(('--password', p4e3, None))
 ParamWidgets.append(('proxy', p4e4, None))
 ParamWidgets.append(('--referer', p4e5, None))
 ParamWidgets.append(('--user-agent', p4e6, None))
-ParamWidgets.append(('--limit-rate', p4s2, lambda x: x+'k' ))
+ParamWidgets.append(('--limit-rate', p1s2, lambda x: x+'k' ))
 ParamWidgets.append(('', p4e7, lambda x: x.split() ))
 ParamWidgets.append(('on_complete', p4e8, None))
 
@@ -1048,6 +1084,10 @@ page1.pack_start(p1x1, 1, 1)
 p1x1.pack_start(p1l1, 0, 1)
 p1x1.pack_start(p1t1, 1, 1)
 page1.pack_start(p1c1, 0, 1)
+page1.pack_start(p1x2, 0, 1)
+p1x2.pack_start(p1l2a, 0, 1)
+p1x2.pack_start(p1s2, 0, 1)
+p1x2.pack_start(p1l2b, 0, 1)
 note.append_page(page2, gtk.Label(_("Cookies")))
 page2.pack_start(p2x1, 1, 1)
 p2x1.pack_start(p2c1, 0, 1)
@@ -1066,17 +1106,13 @@ page4.pack_start(p4e3, 0, 1)
 page4.pack_start(p4e4, 0, 1)
 page4.pack_start(p4e5, 0, 1)
 page4.pack_start(p4e6, 0, 1)
-page4.pack_start(p4x2, 0, 1)
-p4x2.pack_start(p4l2a, 0, 1)
-p4x2.pack_start(p4s2, 0, 1)
-p4x2.pack_start(p4l2b, 0, 1)
 page4.pack_start(p4e7, 0, 1)
 page4.pack_start(p4e8, 0, 1)
-box_newdl.pack_start(btns_newdl, 0, 1)
-btns_newdl.pack_start(btn_new_save, 0, 0)
-btns_newdl.pack_start(btn_new_open, 0, 0)
-btns_newdl.pack_start(btn_new_queue, 0, 0)
-btns_newdl.pack_start(btn_new_no, 0, 0)
+box_newdl.pack_start(btns_newdl, 0, 0)
+btns_newdl.pack_start(btn_new_save, 0, 1)
+btns_newdl.pack_start(btn_new_open, 0, 1)
+btns_newdl.pack_start(btn_new_queue, 0, 1)
+btns_newdl.pack_start(btn_new_no, 0, 1)
 
 
 
