@@ -11,7 +11,6 @@ import glib
 import pango
 import gettext
 import re
-import argparse
 import xattr
 import threading
 import time
@@ -379,11 +378,15 @@ class Readlines(object):
 	def __del__(self):
 		pass
 
+def convert_to_bytes(s, p='b'):
+	prefix = {'b': 1, 'k': 1024, 'm': 1024**2, 'g': 1024**3, 't': 1024**4, 'p': 1024**5,}
+	m = re.search('(.+?)([a-z]?)$', s, re.IGNORECASE)
+	b = float(m.group(1)) * prefix[m.group(2).lower() or 'b']
+	return b / prefix[p]
 
 ### Private methods ###
 
 class Download(object):
-	prefix = {'b': 1024**0, 'k': 1024**1, 'm': 1024**2, 'g': 1024**3, 't': 1024**4, 'p': 1024**5,}
 	def __init__(self, url, params={}):
 		self.original_url = url
 		self.params = params
@@ -571,7 +574,7 @@ class Download(object):
 				refresh = True
 			if m_speed:
 				self.speed_str = m_speed.group(1) + m_speed.group(2) + '/s'
-				self.speed = float(m_speed.group(1)) * self.prefix[m_speed.group(2).lower()]
+				self.speed = convert_to_bytes(m_speed.group(1) + m_speed.group(2))
 				if m_speed.group(3) is not None:
 					self.eta_str = m_speed.group(3)
 					eta = 0
@@ -617,14 +620,74 @@ class Download(object):
 
 
 def win_main_show():
+	# Manage GUI
 	btn_remove.hide()
+	
+	# Start background thread
 	continous_refresh_thread = threading.Thread(target=continous_refresh, args=())
 	continous_refresh_thread.daemon = True
 	continous_refresh_thread.start()
-	# TODO load cached downloads from logs
-	if args.URL:
-		# TODO open new download window and set urls
-		pass
+	
+	# TODO Load cached downloads from logs
+	
+	# Parse CLI args
+	cliURLs = []
+	cliOpts = []
+	idx = 1
+	while idx < len(sys.argv):
+		arg = sys.argv[idx]
+		if arg.startswith('-'):
+			m = re.search('([^=]+)=(.*)', arg)
+			if m:
+				key, val = m.group(1), m.group(2)
+			else:
+				key = arg
+				val = None
+				if idx+1 < len(sys.argv):
+					argnext = sys.argv[idx+1]
+					if not argnext.startswith('-'):
+						val = argnext
+						idx += 1
+			cliOpts.append((key, val))
+		else:
+			cliURLs.append(arg)
+		idx += 1
+	
+	# Start downloads given in CLI
+	if cliURLs:
+		params = {'': [], '--header': [],}
+		def params_def():
+			params[''] += [optnam]
+			if optval is not None:
+				params[''] += [optval]
+		for optnam, optval in cliOpts:
+			if optnam == '--proxy-url':
+				params['proxy'] = optval
+			elif optnam == '--cookies':
+				params['--header'] += ['Cookie: ' + optval]
+			elif optnam == '--run-on-complete':
+				params['on_complete'] = optval
+			elif optnam in ParamWidgets.keys():
+				wdg, getter, putter = ParamWidgets[optnam]
+				if putter is None or putter(optval):
+					if getter is not None:
+						dummydata = getter('x')
+						if hasattr(dummydata, '__iter__'):
+							if not params.has_key(optnam):
+								params[optnam] = []
+							params[optnam] += [optval]
+						else:
+							params[optnam] = optval
+					else:
+						params[optnam] = optval
+				else:
+					params_def()
+			else:
+				params_def()
+		print params
+		show_win_newdl()
+		reset_parameters(params)
+		p1t1.set_text('\n'.join(cliURLs)+'\n')
 
 def act_quit():
 	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
@@ -722,11 +785,21 @@ def start_new_download(url, params, start=True):
 		dl.start()
 	return it
 
-def reset_parameters():
+def reset_parameters(params={}):
 	for wdg in p1t1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
 		wdg.set_text('')
 	p1s2.set_value(0)
 	p4s1.set_value(1)
+	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
+		if params.has_key(flag):
+			data = params[flag]
+			if putter is not None:
+				data = putter(data)
+			if type(data) == int:
+				wdg.set_value(data)
+			elif data:
+				wdg.set_text(data)
+			# TODO workaround for non-Cookie --header's
 
 def show_win_newdl():
 	win_newdl.show_all()
@@ -739,8 +812,8 @@ def show_win_newdl():
 ### Interface procedures ###
 
 def act_new():
-	reset_parameters()
 	show_win_newdl()
+	reset_parameters()
 
 def act_start_all():
 	for it, dl in iter_downloadlist():
@@ -811,16 +884,9 @@ def act_show_log(it, dl):
 
 def act_props(it, dl):
 	#print dl.__dict__
-	reset_parameters()
-	for flag, wdg, getter, putter in ParamWidgets:
-		if dl.params.has_key(flag):
-			data = dl.params[flag]
-			if putter is not None:
-				data = putter(data)
-			if data:
-				wdg.set_text(data)
-	p1t1.set_text(dl.original_url)
 	show_win_newdl()
+	reset_parameters(dl.params)
+	p1t1.set_text(dl.original_url)
 
 
 
@@ -900,7 +966,7 @@ def on_treeview_key(tree, event):
 ## New download window
 def new_download(start=True, open=False):
 	params = {}
-	for flag, wdg, getter, putter in ParamWidgets:
+	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
 		data = wdg.get_text()
 		if getter is not None:
 			data = getter(data)
@@ -947,18 +1013,7 @@ StatusIcon = {
 	S_ERR: gtk.STOCK_NO,
 	S_STOP: gtk.STOCK_MEDIA_PAUSE,
 }
-ParamWidgets = []
 
-argparser = argparse.ArgumentParser()
-argparser.add_argument('--stdin', help=_(""))
-argparser.add_argument('--cookie', metavar='NAME=STRING;NAME=STRING;...', help=_(""))
-argparser.add_argument('--cookie-jar', metavar='FILE', help=_(""))
-argparser.add_argument('--auth', metavar='USER:PASS', help=_(""))
-argparser.add_argument('--proxy', metavar='URL', help=_(""))
-argparser.add_argument('--referer', metavar='URL', help=_(""))
-argparser.add_argument('--agent', metavar='STRING', help=_(""))
-argparser.add_argument('URL', nargs='*', help=_(""))
-args = argparser.parse_args()
 
 
 gtk.gdk.threads_init()
@@ -1189,23 +1244,25 @@ btn_new_open.connect('clicked', lambda b: new_download(open=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
-ParamWidgets.append(('--directory-prefix', p1c1, lambda a: a if a!='' else os.getcwd(), None))
-ParamWidgets.append(('--load-cookies', p2c1, None, None))
-ParamWidgets.append(('--header', p2t1, \
- lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))],\
- lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n' ))
-ParamWidgets.append(('--post-data', p3t1, \
- lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
- lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n' ))
-ParamWidgets.append(('--tries', p4s1, None, None))
-ParamWidgets.append(('--user', p4e2, None, None))
-ParamWidgets.append(('--password', p4e3, None, None))
-ParamWidgets.append(('proxy', p4e4, None, None))
-ParamWidgets.append(('--referer', p4e5, None, None))
-ParamWidgets.append(('--user-agent', p4e6, None, None))
-ParamWidgets.append(('--limit-rate', p1s2, lambda a: a+'k', lambda b: re.sub('[^\d\.]', '', b) ))
-ParamWidgets.append(('', p4e7, lambda a: a.split(), lambda b: ' '.join(b) ))
-ParamWidgets.append(('on_complete', p4e8, None, None))
+ParamWidgets = {
+	'--directory-prefix': (p1c1, lambda a: a if a!='' else os.getcwd(), None),
+	'--load-cookies': (p2c1, None, None),
+	'--header': (p2t1, \
+		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))],\
+		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n' ),
+	'--post-data': (p3t1, \
+		lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
+		lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n' ),
+	'--tries': (p4s1, None, lambda b: int(b) ),
+	'--user': (p4e2, None, None),
+	'--password': (p4e3, None, None),
+	'proxy': (p4e4, None, None),
+	'--referer': (p4e5, None, None),
+	'--user-agent': (p4e6, None, None),
+	'--limit-rate': (p1s2, lambda a: a+'k', lambda b: int(convert_to_bytes(b, 'k')) ),
+	'': (p4e7, lambda a: a.split(), lambda b: ' '.join(b) ),
+	'on_complete': (p4e8, None, None),
+}
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
