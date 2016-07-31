@@ -16,7 +16,7 @@ import xattr
 import threading
 import time
 import functools
-from urllib import urlencode
+import urllib
 
 
 def add_key_binding(widget, keyname, callback):
@@ -166,12 +166,16 @@ class ScrolledTextView(gtk.ScrolledWindow):
 		return self.TextView.grab_focus()
 
 class LabelledEntry(gtk.HBox):
-	def __init__(self, label='', spacing=2):
+	def __init__(self, label='', markup=None, tooltip=None, spacing=2):
 		super(self.__class__, self).__init__(spacing=spacing)
 		self.Label = gtk.Label(label)
 		self.Entry = gtk.Entry()
 		self.Label.set_alignment(0, 0)
 		self.Label.set_padding(4, 5)
+		if markup is not None:
+			self.Label.set_markup(markup)
+		if tooltip is not None:
+			self.set_tooltip_text(tooltip)
 		self.pack_start(self.Label, 0, 1)
 		self.pack_start(self.Entry, 1, 1)
 		for cname in 'Entry', 'Label':
@@ -191,7 +195,7 @@ def on_click_button(btn, func):
 	return False
 
 class StockButton(gtk.Button):
-	def __init__(self, label=None, stock=None, use_underline=True, icon_size=None):
+	def __init__(self, label=None, stock=None, use_underline=True, icon_size=None, tooltip=None):
 		if stock is not None and stock in gtk.stock_list_ids():
 			stock_tmp = stock
 		else:
@@ -205,6 +209,8 @@ class StockButton(gtk.Button):
 			self.set_icon(stock)
 		if icon_size is not None:
 			self.set_icon(stock, icon_size)
+		if tooltip is not None:
+			self.set_tooltip_text(tooltip)
 	def __get_children(self):
 		align = self.get_children()[0]
 		hbox = align.get_children()[0]
@@ -301,6 +307,21 @@ def load_toolitems(toolbar, toolitems):
 		items.append(tbi)
 	return items
 
+def str_accurate_at_time(ts):
+	then = time.localtime(ts)
+	now = time.localtime(time.time())
+	if now.tm_year == then.tm_year:
+		if now.tm_mon == then.tm_mon:
+			if now.tm_mday == then.tm_mday:
+				fmt = '%H:%M'
+			else:
+				fmt = '%b. %d.'
+		else:
+			fmt = '%b. %d.'
+	else:
+		fmt = '%Y %B'
+	return time.strftime(fmt)
+
 ## OS functions
 
 def mkdir(d):
@@ -362,6 +383,7 @@ class Readlines(object):
 ### Private methods ###
 
 class Download(object):
+	prefix = {'b': 1024**0, 'k': 1024**1, 'm': 1024**2, 'g': 1024**3, 't': 1024**4, 'p': 1024**5,}
 	def __init__(self, url, params={}):
 		self.original_url = url
 		self.params = params
@@ -378,6 +400,10 @@ class Download(object):
 		self.running = False
 		self.size = None
 		self.percent = -1
+		self.speed = 0
+		self.speed_str = 'n/a'
+		self.eta = -1
+		self.eta_str = 'n/a'
 		self.lastline = ''
 	def __getitem__(self, key):
 		self.Lock.acquire(True)
@@ -458,22 +484,10 @@ class Download(object):
 			return
 		
 		self['status'] = S_INIT
-		# TODO readlines into thread
-		for line in Readlines(readhandle):
-			line = line.strip()
-			self.lastline = line
-			m_pid = re.search('pid (\d+)', line)
-			if m_pid:
-				self['pid'] = int(m_pid.group(1))
-				break
-		readhandle.close()
-		if self['pid']:
-			t = threading.Thread(target=self.watch_log, args=())
-			t.daemon = True
-			t.start()
-		else:
-			self['status'] = S_ERR
 		refresh_download_state(self)
+		t1 = threading.Thread(target=self.watch_output, args=(readhandle,))
+		t1.daemon = True
+		t1.start()
 	def wget_running(self):
 		if self['pid'] is not None:
 			try:
@@ -482,6 +496,24 @@ class Download(object):
 			except OSError:
 				pass
 		return False
+	def watch_output(self, readhandle):
+		for line in Readlines(readhandle):
+			stderr(line)
+			line = line.strip()
+			if line != '':
+				self.lastline = line
+				m_pid = re.search('pid (\d+)', line)
+				if m_pid:
+					self['pid'] = int(m_pid.group(1))
+				refresh_download_state(self)
+		readhandle.close()
+		if self['pid']:
+			t2 = threading.Thread(target=self.watch_log, args=())
+			t2.daemon = True
+			t2.start()
+		else:
+			self['status'] = S_ERR
+		refresh_download_state(self)
 	def watch_log(self):
 		while not os.path.exists(self.logfile):
 			time.sleep(1)
@@ -514,7 +546,7 @@ class Download(object):
 			m_name2 = re.search('^Server file no newer than local file .(.+). -- not retrieving\.$', line)
 			m_percent = re.search('^\s{0,2}(\d+)(\.\d+)?%', line)
 			m_progress = re.search('^\s*\[', line)
-			#m_speed = re.search('(\d+(?:\.\d+)?)K/s  eta (\S+)', line)
+			m_speed = re.search('(\d+(?:\.\d+)?)(.)/s(?:\s+eta\s+(.+))?', line)
 			m_kilodots = re.search('^\s*(\d+)K\s+([., ]*)', line)
 			m_completed = re.search(' saved \S+$', line)
 			
@@ -526,6 +558,8 @@ class Download(object):
 			if m_name2:
 				self.outfile = m_name2.group(1)
 				self.completed = True
+				self.eta = -1
+				self.eta_str = ''
 				refresh = True
 			if m_percent:
 				self.percent = int(m_percent.group(1))
@@ -534,6 +568,17 @@ class Download(object):
 			if m_progress:
 				pulse_download(self['pid'])
 				self['status'] = S_DL
+				refresh = True
+			if m_speed:
+				self.speed_str = m_speed.group(1) + m_speed.group(2) + '/s'
+				self.speed = float(m_speed.group(1)) * self.prefix[m_speed.group(2).lower()]
+				if m_speed.group(3) is not None:
+					self.eta_str = m_speed.group(3)
+					eta = 0
+					for u, q in ('d', 24*60*60), ('h', 60*60), ('m', 60), ('s', 1):
+						m = re.search('(\d+)'+u, m_speed.group(3))
+						if m: eta += int(m.group(1)) * q
+					self.eta = eta
 				refresh = True
 			if m_kilodots:
 				if self.size is not None:
@@ -547,7 +592,10 @@ class Download(object):
 			if m_completed:
 				self.completed = True
 				self['status'] = S_SAVED
+				self.eta = -1
+				self.eta_str = ''
 				refresh = True
+				on_completed_download(self)
 			if self.lastline != line:
 				refresh = True
 			self.lastline = line
@@ -570,6 +618,9 @@ class Download(object):
 
 def win_main_show():
 	btn_remove.hide()
+	continous_refresh_thread = threading.Thread(target=continous_refresh, args=())
+	continous_refresh_thread.daemon = True
+	continous_refresh_thread.start()
 	# TODO load cached downloads from logs
 	if args.URL:
 		# TODO open new download window and set urls
@@ -604,12 +655,12 @@ class iter_downloadlist(object):
 	def __del__(self):
 		pass
 
-def refresh_download_state(dlobj):
+def refresh_download_state(dlobj, doAll=False):
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
 	for it, dl in iter_downloadlist():
 		row = DownLoadList[it]
-		if dl == dlobj:
+		if doAll or dl == dlobj:
 			if dl.outfile is not None:
 				row[COL_NAME] = os.path.basename(dl.outfile)
 			if dl.percent >= 0:
@@ -632,10 +683,17 @@ def refresh_download_state(dlobj):
 			row[COL_STATUS] = _(Status[dl['status']])
 			row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
 			
+			row[COL_SPEED_BPS] = dl.speed
+			row[COL_SPEED_STR] = dl.speed_str
+			row[COL_ETA_SEC] = dl.eta
+			row[COL_ETA_STR] = dl.eta_str
+			row[COL_ADDED_DATE] = str_accurate_at_time(row[COL_ADDED_TSTMP])
+			
 			# if the current download is selected, then refresh toolbuttons sensitivity
 			if main_selection.iter_is_selected(it):
 				on_selection_change(main_selection)
-			break
+			if not doAll:
+				break
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_leave()
 
@@ -644,9 +702,22 @@ def pulse_download(pid):
 		if dl['pid'] == pid:
 			DownLoadList[it][COL_PULSE] += 1
 
+def continous_refresh():
+	while True:
+		refresh_download_state(None, doAll=True)
+		time.sleep(60)
+
+def on_completed_download(dl):
+	if dl.params.has_key('on_complete'):
+		s = dl.params['on_complete']
+		SQ = '\''
+		esc_filename = SQ + dl.outfile.replace(SQ, SQ+'\\'+SQ+SQ) + SQ
+		shcmd = s.replace('{}', esc_filename)
+		run_detached('sh', ['-c', shcmd])
+
 def start_new_download(url, params, start=True):
 	dl = Download(url, params)
-	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, '', 0, 0, gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
+	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), '', 0, 0, -1, '', -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
 	if start:
 		dl.start()
 	return it
@@ -739,7 +810,17 @@ def act_show_log(it, dl):
 	win_log.show_all()
 
 def act_props(it, dl):
-	print dl.__dict__
+	#print dl.__dict__
+	reset_parameters()
+	for flag, wdg, getter, putter in ParamWidgets:
+		if dl.params.has_key(flag):
+			data = dl.params[flag]
+			if putter is not None:
+				data = putter(data)
+			if data:
+				wdg.set_text(data)
+	p1t1.set_text(dl.original_url)
+	show_win_newdl()
 
 
 
@@ -755,7 +836,7 @@ def on_selection_change(selection):
 	iters = map(lambda p: DownLoadList.get_iter(p), selection.get_selected_rows()[1])
 	dls = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
 	num = len(iters)
-	btn_resume.set_sensitive(num>0 and all(not dl.running and not dl.completed for dl in dls))
+	btn_resume.set_sensitive(num>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
 	btn_pause.set_sensitive(num>0 and all(dl.running for dl in dls))
 	btn_remove.set_sensitive(num>0 and all(dl.outfile is not None and not dl.running for dl in dls))
 	btn_clear.set_sensitive(num>0 and all(not dl.running for dl in dls))
@@ -770,6 +851,18 @@ def on_context_menu(menuitem, function):
 def event_masked(event):
 	return any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META'])
 
+def popup_context_menu(it, event, button=None, placement_func=None):
+	dl = DownLoadList[it][COL_DLOBJ]
+	ContextMenu.set_data('iterator', it)
+	cmi_open.set_sensitive(dl.outfile is not None)
+	cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
+	cmi_refetch.set_sensitive(not dl.running)
+	cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
+	cmi_pause.set_sensitive(dl.running)
+	cmi_clear.set_sensitive(not dl.running)
+	if button is None: button = event.button
+	ContextMenu.popup(None, None, placement_func, button, event.time)
+
 def on_treeview_click(tree, event):
 	if event_masked(event):
 		return False
@@ -781,14 +874,7 @@ def on_treeview_click(tree, event):
 		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
 			main_selection.unselect_all()
 			main_selection.select_iter(it)
-			ContextMenu.set_data('iterator', it)
-			cmi_open.set_sensitive(dl.outfile is not None)
-			cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
-			cmi_refetch.set_sensitive(not dl.running)
-			cmi_resume.set_sensitive(not dl.running and not dl.completed)
-			cmi_pause.set_sensitive(dl.running)
-			cmi_clear.set_sensitive(not dl.running)
-			ContextMenu.popup(None, None, None, event.button, event.time)
+			popup_context_menu(it, event)
 			return True
 		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
 			act_open_file(it, dl)
@@ -801,20 +887,30 @@ def on_treeview_key(tree, event):
 	if event.keyval == gtk.gdk.keyval_from_name('Delete'):
 		act_on_selection(act_clear_download)
 		return True
+	if event.keyval == gtk.gdk.keyval_from_name('Menu'):
+		rows = main_selection.get_selected_rows()[1]
+		if len(rows) == 1:
+			it = DownLoadList.get_iter(rows[0])
+			x, y = tree.window.get_origin()
+			popup_context_menu(it, event, 3, placement_func=lambda d: (x, y, True))
+			return True
 	return False
 
 
 ## New download window
 def new_download(start=True, open=False):
 	params = {}
-	for flag, wdg, getter in ParamWidgets:
+	for flag, wdg, getter, putter in ParamWidgets:
 		data = wdg.get_text()
 		if getter is not None:
 			data = getter(data)
 		if data:
-			params[flag] = data
+			if hasattr(data, '__iter__') and params.has_key(flag):
+				params[flag] += data
+			else:
+				params[flag] = data
 	if open:
-		params['on_complete'] = 'mimeopen-gui %s'
+		params['on_complete'] = 'mimeopen-gui {}'
 	
 	main_selection.unselect_all()
 	uniq = {}
@@ -833,7 +929,7 @@ _ = gettext.gettext
 LastFolder = os.getcwd()
 XATTR_CHARSET = 'user.mime_encoding'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
-COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(10)
+COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(16)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP = range(6)
 Status = {
 	S_QUEUE: "Queued",
@@ -878,7 +974,7 @@ win_main = gtk.Window()
 box_main = gtk.VBox()
 main_toolbar = gtk.Toolbar()
 scroller = gtk.ScrolledWindow()
-DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, str, float, int, str, str, str)
+DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, int, str, str, float, int, float, str, int, str, str, str, str)
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
@@ -927,6 +1023,8 @@ on_selection_change(main_selection)
 
 tvc = gtk.TreeViewColumn(_("Filename"))
 tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_NAME)
+tvc.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_pix, False)
@@ -937,6 +1035,8 @@ tvc.add_attribute(cr_pix, 'pixbuf', COL_PXB)
 main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Progress"))
 tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_PERCENT)
+tvc.set_sort_indicator(True)
 cr_prc = gtk.CellRendererProgress()
 tvc.pack_start(cr_prc, True)
 tvc.add_attribute(cr_prc, 'text', COL_PRCSTR)
@@ -945,6 +1045,8 @@ tvc.add_attribute(cr_prc, 'pulse', COL_PULSE)
 main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Status"))
 tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_STATUS)
+tvc.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_pix, False)
@@ -952,7 +1054,33 @@ tvc.pack_start(cr_txt, True)
 tvc.add_attribute(cr_txt, 'text', COL_STATUS)
 tvc.add_attribute(cr_pix, 'icon-name', COL_STATUS_ICON)
 main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("Speed"))
+tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_SPEED_BPS)
+tvc.set_sort_indicator(True)
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'text', COL_SPEED_STR)
+main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("Added"))
+tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_ADDED_TSTMP)
+tvc.set_sort_indicator(True)
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'text', COL_ADDED_DATE)
+main_list.append_column(tvc)
+tvc = gtk.TreeViewColumn(_("ETA"))
+tvc.set_resizable(True)
+tvc.set_sort_column_id(COL_ETA_SEC)
+tvc.set_sort_indicator(True)
+cr_txt = gtk.CellRendererText()
+tvc.pack_start(cr_txt, True)
+tvc.add_attribute(cr_txt, 'text', COL_ETA_STR)
+main_list.append_column(tvc)
 tvc = gtk.TreeViewColumn(_("Message"))
+tvc.set_sort_column_id(COL_MESSAGE)
+tvc.set_sort_indicator(True)
 tvc.set_resizable(True)
 cr_txt = gtk.CellRendererText()
 tvc.pack_start(cr_txt, True)
@@ -960,7 +1088,6 @@ tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
 main_list.append_column(tvc)
 
 main_list.set_rules_hint(True)
-main_list.set_headers_clickable(True)
 main_list.set_reorderable(True)
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
@@ -1032,13 +1159,13 @@ p4e3 = LabelledEntry(label=_("Password"))
 p4e4 = LabelledEntry(label=_("Proxy URL"))
 p4e5 = LabelledEntry(label=_("Referer"))
 p4e6 = LabelledEntry(label=_("User Agent"))
-p4e7 = LabelledEntry(label=_("Custom wget(1) options"))
-p4e8 = LabelledEntry(label=_("Run on complete"))
+p4e7 = LabelledEntry(label=_("Custom options"), tooltip=_("type further options for wget\nsee 'wget --help' or 'man wget'"))
+p4e8 = LabelledEntry(label=_("Run on complete"), tooltip=_("type a shell command-line\npair of curly brackets are substituted with downloaded file name\nexample: xdg-open {} && rm {}"))
 btns_newdl = gtk.HBox(spacing=5)
-btn_new_save = StockButton(label=_("Download"), stock=gtk.STOCK_SAVE)
+btn_new_save = StockButton(label=_("Download"), stock=gtk.STOCK_SAVE, tooltip='Ctrl-Enter')
 btn_new_open = StockButton(stock=gtk.STOCK_OPEN)
-btn_new_queue = StockButton(label=_("Queue"), stock=gtk.STOCK_ADD)
-btn_new_no = StockButton(stock=gtk.STOCK_CANCEL)
+btn_new_queue = StockButton(label=_("Queue"), stock=gtk.STOCK_ADD, tooltip='Ctrl-Shift-Enter')
+btn_new_no = StockButton(stock=gtk.STOCK_CANCEL, tooltip='Esc')
 
 # Configure new download window's widgets
 win_newdl.set_transient_for(win_main)
@@ -1062,19 +1189,23 @@ btn_new_open.connect('clicked', lambda b: new_download(open=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
-ParamWidgets.append(('--directory-prefix', p1c1, lambda x: x if x!='' else os.getcwd() ))
-ParamWidgets.append(('--load-cookies', p2c1, None))
-ParamWidgets.append(('--header', p2t1, lambda x: map(lambda k: 'Cookie: ' + k, filter(lambda k: len(k), x.split('\n'))) ))
-ParamWidgets.append(('--post-data', p3t1, lambda x: urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), x.split('\n'))))) ))
-ParamWidgets.append(('--tries', p4s1, None))
-ParamWidgets.append(('--user', p4e2, None))
-ParamWidgets.append(('--password', p4e3, None))
-ParamWidgets.append(('proxy', p4e4, None))
-ParamWidgets.append(('--referer', p4e5, None))
-ParamWidgets.append(('--user-agent', p4e6, None))
-ParamWidgets.append(('--limit-rate', p1s2, lambda x: x+'k' ))
-ParamWidgets.append(('', p4e7, lambda x: x.split() ))
-ParamWidgets.append(('on_complete', p4e8, None))
+ParamWidgets.append(('--directory-prefix', p1c1, lambda a: a if a!='' else os.getcwd(), None))
+ParamWidgets.append(('--load-cookies', p2c1, None, None))
+ParamWidgets.append(('--header', p2t1, \
+ lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))],\
+ lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n' ))
+ParamWidgets.append(('--post-data', p3t1, \
+ lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
+ lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n' ))
+ParamWidgets.append(('--tries', p4s1, None, None))
+ParamWidgets.append(('--user', p4e2, None, None))
+ParamWidgets.append(('--password', p4e3, None, None))
+ParamWidgets.append(('proxy', p4e4, None, None))
+ParamWidgets.append(('--referer', p4e5, None, None))
+ParamWidgets.append(('--user-agent', p4e6, None, None))
+ParamWidgets.append(('--limit-rate', p1s2, lambda a: a+'k', lambda b: re.sub('[^\d\.]', '', b) ))
+ParamWidgets.append(('', p4e7, lambda a: a.split(), lambda b: ' '.join(b) ))
+ParamWidgets.append(('on_complete', p4e8, None, None))
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
