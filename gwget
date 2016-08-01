@@ -16,6 +16,7 @@ import threading
 import time
 import functools
 import urllib
+import pickle
 
 
 def add_key_binding(widget, keyname, callback):
@@ -314,11 +315,11 @@ def str_accurate_at_time(ts):
 			if now.tm_mday == then.tm_mday:
 				fmt = '%H:%M'
 			else:
-				fmt = '%b. %d.'
+				fmt = '%b. %d'
 		else:
-			fmt = '%b. %d.'
+			fmt = '%b. %d'
 	else:
-		fmt = '%Y %B'
+		fmt = '%Y %b.'
 	return time.strftime(fmt)
 
 ## OS functions
@@ -388,15 +389,27 @@ def convert_to_bytes(s, p='b'):
 
 class Download(object):
 	def __init__(self, url, params={}):
+		self.added_ts = int(time.time())
 		self.original_url = url
 		self.params = params
 		self.progress_type = 'bar:force'
 		#self.progress_type = 'dot:default'
-		self.logfile = None
+		self.logfile = next_logfile()
 		self.outfile = None
 		self.Lock = threading.Lock()
 		self._pid = None
 		self.init()
+	def morior(self):
+		delattr(self, 'Lock')
+	def resurgo(self):
+		self.Lock = threading.Lock()
+		if self.running:
+			t2 = threading.Thread(target=self.watch_log, args=())
+			t2.daemon = True
+			t2.start()
+	def configure(self, attrs, items):
+		for k, v in attrs.iteritems():
+			setattr(self, k, v)
 	def init(self):
 		self['status'] = S_QUEUE
 		self.completed = False
@@ -404,9 +417,9 @@ class Download(object):
 		self.size = None
 		self.percent = -1
 		self.speed = 0
-		self.speed_str = 'n/a'
+		self.speed_str = ''
 		self.eta = -1
-		self.eta_str = 'n/a'
+		self.eta_str = ''
 		self.lastline = ''
 	def __getitem__(self, key):
 		self.Lock.acquire(True)
@@ -453,8 +466,6 @@ class Download(object):
 			return
 		self.init()
 		refresh_download_state(self)
-		if self.logfile is None:
-			self.logfile = next_logfile()
 		if not delete(self.logfile, warn=False):
 			return
 		
@@ -511,6 +522,7 @@ class Download(object):
 				refresh_download_state(self)
 		readhandle.close()
 		if self['pid']:
+			self.running = True
 			t2 = threading.Thread(target=self.watch_log, args=())
 			t2.daemon = True
 			t2.start()
@@ -520,7 +532,6 @@ class Download(object):
 	def watch_log(self):
 		while not os.path.exists(self.logfile):
 			time.sleep(1)
-		self.running = True
 		fh = open(self.logfile, 'r')
 		linebuffer = ''
 		while True:
@@ -628,7 +639,8 @@ def win_main_show():
 	continous_refresh_thread.daemon = True
 	continous_refresh_thread.start()
 	
-	# TODO Load cached downloads from logs
+	# Load cached downloads from object dumps
+	import_downloads()
 	
 	# Parse CLI args
 	cliURLs = []
@@ -684,7 +696,6 @@ def win_main_show():
 					params_def()
 			else:
 				params_def()
-		print params
 		show_win_newdl()
 		reset_parameters(params)
 		p1t1.set_text('\n'.join(cliURLs)+'\n')
@@ -693,14 +704,36 @@ def act_quit():
 	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
 		return True
 	gtk.main_quit()
+	export_downloads()
 	return False
+
+def import_downloads():
+	for f in os.listdir(CacheFolder):
+		if re.match('^gwget-\d+\.obj$', f):
+			f = os.path.join(CacheFolder, f)
+			fh = open(f, 'r')
+			obj = pickle.load(fh)
+			fh.close()
+			DownLoadList_append_new({COL_DLOBJ: obj})
+			obj.resurgo()
+	refresh_download_state(None, doAll=True)
+
+def export_downloads():
+	for it, dl in iter_downloadlist():
+		dl.morior()
+		fh = open(get_dumpfile(dl), 'w')
+		pickle.dump(dl, fh)
+		fh.close()
+
+def get_dumpfile(dl):
+	return dl.logfile[:-3] + 'obj'
 
 def next_logfile():
 	n = len(os.listdir(CacheFolder))
-	f = 'gwget.' + str(n)
+	f = 'gwget-' + str(n) + '.log'
 	while os.path.exists(os.path.join(CacheFolder, f)) or any(f == os.path.basename(dl.logfile or '') for it, dl in iter_downloadlist()):
 		n += 1
-		f = 'gwget.' + str(n)
+		f = 'gwget-' + str(n) + '.log'
 	return os.path.join(CacheFolder, f)
 
 class iter_downloadlist(object):
@@ -724,20 +757,27 @@ def refresh_download_state(dlobj, doAll=False):
 	for it, dl in iter_downloadlist():
 		row = DownLoadList[it]
 		if doAll or dl == dlobj:
-			if dl.outfile is not None:
+			if dl.outfile is None:
+				row[COL_NAME] = os.path.basename(dl.original_url)
+			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
+			row[COL_FILE_ICON] = gtk.STOCK_FILE
 			if dl.percent >= 0:
 				row[COL_PULSE] = -1
 				row[COL_PERCENT] = dl.percent
 				row[COL_PRCSTR] = str(dl.percent) + '%'
 			else:
+				row[COL_PERCENT] = 0
 				if dl.running:
+					if row[COL_PULSE] < 0:
+						row[COL_PULSE] = 0
 					try:
-						row[COL_PULSE] += 2
+						row[COL_PULSE] += 1
 					except TypeError:
 						row[COL_PULSE] = 1
 				else:
 					if dl.completed:
+						row[COL_PERCENT] = 100
 						row[COL_PULSE] = gobject.constants.G_MAXINT
 					else:
 						row[COL_PULSE] = 0
@@ -750,7 +790,8 @@ def refresh_download_state(dlobj, doAll=False):
 			row[COL_SPEED_STR] = dl.speed_str
 			row[COL_ETA_SEC] = dl.eta
 			row[COL_ETA_STR] = dl.eta_str
-			row[COL_ADDED_DATE] = str_accurate_at_time(row[COL_ADDED_TSTMP])
+			row[COL_ADDED_TSTMP] = dl.added_ts
+			row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
 			
 			# if the current download is selected, then refresh toolbuttons sensitivity
 			if main_selection.iter_is_selected(it):
@@ -778,9 +819,25 @@ def on_completed_download(dl):
 		shcmd = s.replace('{}', esc_filename)
 		run_detached('sh', ['-c', shcmd])
 
+def DownLoadList_append_new(d):
+	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
+	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
+	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE
+	# DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, int, str, 
+	#   str, float, int, float, str, 
+	#   int, str, str, str, str)
+	# it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), 
+	#   '', 0, 0, -1, '', 
+	#   -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
+	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '', -1, '', '', '', '']
+	for idx, val in d.iteritems():
+		row[idx] = val
+	DownLoadList.append(row)
+
 def start_new_download(url, params, start=True):
 	dl = Download(url, params)
-	it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), '', 0, 0, -1, '', -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
+	DownLoadList_append_new({COL_DLOBJ: dl})
+	refresh_download_state(dl)
 	if start:
 		dl.start()
 	return it
@@ -866,24 +923,34 @@ def act_clear_download(it, dl):
 			except DialogCancel:
 				return
 		if dl.logfile is not None:
-			delete(dl.logfile)
+			untrack_download_file(dl)
 		del DownLoadList[it]
 
+def untrack_download_file(dl):
+	delete(get_dumpfile(dl))
+	delete(dl.logfile)
+
 def act_show_log(it, dl):
-	win_log = gtk.Window()
-	txv = ScrolledTextView()
-	win_log.set_default_size(675, 345)
-	win_log.connect('delete-event', lambda w,e: w.destroy())
-	add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
-	win_log.set_transient_for(win_main)
-	win_log.set_modal(True)
-	win_log.add(txv)
-	txv.set_text(''.join(open(dl.logfile, 'r').readlines()))
-	txv.set_editable(False)
-	win_log.show_all()
+	try:
+		fh = open(dl.logfile, 'r')
+	except IOError, e:
+		display_error(e)
+	else:
+		win_log = gtk.Window()
+		txv = ScrolledTextView()
+		win_log.set_default_size(675, 345)
+		win_log.connect('delete-event', lambda w,e: w.destroy())
+		add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
+		win_log.set_transient_for(win_main)
+		win_log.set_modal(True)
+		win_log.add(txv)
+		txv.set_text(''.join(fh.readlines()))
+		txv.set_editable(False)
+		win_log.show_all()
+		fh.close()
 
 def act_props(it, dl):
-	#print dl.__dict__
+	print dl.__dict__
 	show_win_newdl()
 	reset_parameters(dl.params)
 	p1t1.set_text(dl.original_url)
