@@ -10,3 +10,9 @@
 * `Ctrl-Q` - Quit
 * `Ctrl-Enter` - On New download dialog - Start downloading
 * `Ctrl-Shift-Enter` - On New download dialog - Queue downloads
+
+## Screenshots
+
+![](img/1.png)
+![](img/2.png)
+![](img/4.png)
