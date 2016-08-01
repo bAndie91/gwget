@@ -831,11 +831,11 @@ def DownLoadList_append_new(d):
 	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '', -1, '', '', '', '']
 	for idx, val in d.iteritems():
 		row[idx] = val
-	DownLoadList.append(row)
+	return DownLoadList.append(row)
 
 def start_new_download(url, params, start=True):
 	dl = Download(url, params)
-	DownLoadList_append_new({COL_DLOBJ: dl})
+	it = DownLoadList_append_new({COL_DLOBJ: dl})
 	refresh_download_state(dl)
 	if start:
 		dl.start()
@@ -938,6 +938,8 @@ def act_show_log(it, dl):
 		win_log = gtk.Window()
 		txv = ScrolledTextView()
 		win_log.set_default_size(675, 345)
+		win_log.set_title(_("Log - %s") % (dl.original_url))
+		win_log.set_icon_name('emblem-downloads')
 		win_log.connect('delete-event', lambda w,e: w.destroy())
 		add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
 		win_log.set_transient_for(win_main)
@@ -1048,8 +1050,9 @@ def new_download(start=True, open=False):
 	uniq = {}
 	for url in p1t1.get_text().split():
 		if not uniq.has_key(url):
-			uniq[url] = it = start_new_download(url, params, start=start)
+			it = start_new_download(url, params, start=start)
 			main_selection.select_iter(it)
+			uniq[url] = 1
 	win_newdl.hide()
 
 
@@ -1112,6 +1115,8 @@ cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
 
 # Configure main window's widgets
 win_main.set_default_size(950, 450)
+win_main.set_title(_("Downloads"))
+win_main.set_icon_name('emblem-downloads')
 start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
 win_main.connect('delete-event', lambda w,e: act_quit())
 add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
@@ -1291,6 +1296,8 @@ btn_new_no = StockButton(stock=gtk.STOCK_CANCEL, tooltip='Esc')
 # Configure new download window's widgets
 win_newdl.set_transient_for(win_main)
 win_newdl.set_modal(True)
+win_newdl.set_title(_("New Download"))
+win_newdl.set_icon_name('emblem-downloads')
 win_newdl.connect('delete-event', lambda w,e: w.hide() or True)
 add_key_binding(win_newdl, 'Escape', lambda a,b,c,d: win_newdl.hide() or True)
 add_key_binding(win_newdl, '<Control>Return', lambda a,b,c,d: new_download() or True)
