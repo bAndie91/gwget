@@ -9,4 +9,4 @@
 * `Ctrl-O` - Options
 * `Ctrl-Q` - Quit
 * `Ctrl-Enter` - On New download dialog - Start downloading
-* `Ctrl-Enter` - On New download dialog - Queue downloads
+* `Ctrl-Shift-Enter` - On New download dialog - Queue downloads
