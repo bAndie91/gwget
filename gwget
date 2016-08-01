@@ -757,7 +757,7 @@ def refresh_download_state(dlobj, doAll=False):
 		row = DownLoadList[it]
 		if doAll or dl == dlobj:
 			if dl.outfile is None:
-				row[COL_NAME] = os.path.basename(dl.original_url)
+				row[COL_NAME] = os.path.basename(urllib.splitquery(dl.original_url)[0])
 			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
 			row[COL_FILE_ICON] = gtk.STOCK_FILE
@@ -951,7 +951,7 @@ def act_show_log(it, dl):
 		fh.close()
 
 def act_props(it, dl):
-	print dl.__dict__
+	#print dl.__dict__
 	show_win_newdl()
 	reset_parameters(dl.params)
 	p1t1.set_text(dl.original_url)
@@ -1054,6 +1054,43 @@ def new_download(start=True, open=False):
 			main_selection.select_iter(it)
 			uniq[url] = 1
 	win_newdl.hide()
+
+def DnD_motion(wdg, context, x, y, time):
+	action = None
+	for act in gtk.gdk.ACTION_COPY, gtk.gdk.ACTION_MOVE:
+		if context.suggested_action & act:
+			action = act
+			break
+	if 'text/plain' in context.targets and action is not None:
+		wdg.drag_highlight()
+		context.drag_status(action, time)
+		return True
+	return False
+
+def DnD_accept(wdg, context, x, y, time):
+	accepted = False
+	typ = 'text/plain'
+	if typ in context.targets:
+		wdg.drag_get_data(context, typ, time)
+		accepted = True
+	context.drop_reply(accepted, time)
+	wdg.drag_unhighlight()
+	return True
+
+def DnD_receive(wdg, context, x, y, selectiondata, info, time):
+	success = False
+	if selectiondata.get_length() > -1:
+		typ = selectiondata.get_data_type()
+		if typ == 'text/plain':
+			urls = '\n'.join(selectiondata.get_text().split())+'\n'
+			act_new()
+			p1t1.set_text(urls)
+			if context.action == gtk.gdk.ACTION_MOVE:
+				new_download()
+			success = True
+	context.finish(success, False, time)
+	return True
+
 
 
 
@@ -1217,6 +1254,10 @@ main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
+main_list.drag_dest_set(0, [], 0)
+main_list.connect('drag-motion', DnD_motion)
+main_list.connect('drag-drop', DnD_accept)
+main_list.connect('drag-data-received', DnD_receive)
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
 cmi_open.connect('activate', on_context_menu, act_open_file)
