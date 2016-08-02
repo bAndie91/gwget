@@ -15,6 +15,7 @@ import threading
 import time
 import functools
 import urllib
+import urlparse
 import pickle
 
 
@@ -25,6 +26,8 @@ def add_key_binding(widget, keyname, callback):
 	widget.add_accel_group(accelgroup)
 
 def display_error(e):
+	if threading.currentThread().name != 'MainThread':
+		gtk.threads_enter()
 	text = None
 	if isinstance(e, OSError) or isinstance(e, IOError):
 		text = '%s (#%d)\n%s' % (e.strerror, e.errno, e.filename)
@@ -38,6 +41,8 @@ def display_error(e):
 	dlg.set_title(_("Error"))
 	dlg.run()
 	dlg.destroy()
+	if threading.currentThread().name != 'MainThread':
+		gtk.threads_leave()
 
 class DialogCancel(Exception):
 	pass
@@ -619,6 +624,7 @@ class Download(object):
 		self['status'] = S_ERR
 		self['pid'] = None
 		refresh_download_state(self)
+		on_ended_download(self)
 	def stop(self):
 		if self['pid'] is not None:
 			try:
@@ -757,7 +763,7 @@ def refresh_download_state(dlobj, doAll=False):
 		row = DownLoadList[it]
 		if doAll or dl == dlobj:
 			if dl.outfile is None:
-				row[COL_NAME] = os.path.basename(urllib.splitquery(dl.original_url)[0])
+				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.original_url).path))
 			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
 			row[COL_FILE_ICON] = gtk.STOCK_FILE
@@ -809,6 +815,19 @@ def continous_refresh():
 	while True:
 		refresh_download_state(None, doAll=True)
 		time.sleep(60)
+
+def on_ended_download(dl):
+	this_host = urlparse.urlparse(dl.original_url).hostname
+	start_dl = None
+	for it, dl in iter_downloadlist():
+		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.original_url).hostname:
+			if dl['status'] in [S_INIT, S_DL]:
+				start_dl = None
+				break
+			if dl['status'] in [S_QUEUE]:
+				start_dl = dl
+	if start_dl is not None:
+		start_dl.start()
 
 def on_completed_download(dl):
 	if dl.params.has_key('on_complete'):
@@ -1045,14 +1064,19 @@ def new_download(start=True, open=False):
 				params[flag] = data
 	if open:
 		params['on_complete'] = 'mimeopen-gui {}'
+	params['runnable'] = start
 	
 	main_selection.unselect_all()
-	uniq = {}
+	uniq_url = {}
+	uniq_host = {}
 	for url in p1t1.get_text().split():
-		if not uniq.has_key(url):
-			it = start_new_download(url, params, start=start)
+		if not uniq_url.has_key(url):
+			this_host = urlparse.urlparse(url).hostname
+			start_this = False if not start else not any(this_host == host for host in uniq_host.iterkeys())
+			it = start_new_download(url, params, start=start_this)
 			main_selection.select_iter(it)
-			uniq[url] = 1
+			uniq_url[url] = 1
+			uniq_host[this_host] = 1
 	win_newdl.hide()
 
 def DnD_motion(wdg, context, x, y, time):
