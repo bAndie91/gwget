@@ -393,8 +393,9 @@ def convert_to_bytes(s, p='b'):
 
 class Download(object):
 	def __init__(self, url, params={}):
-		self.added_ts = int(time.time())
+		self.added_ts = time.time()
 		self.original_url = url
+		self.actual_url = url
 		self.params = params
 		self.progress_type = 'bar:force'
 		#self.progress_type = 'dot:default'
@@ -567,6 +568,7 @@ class Download(object):
 			m_speed = re.search('(\d+(?:\.\d+)?)(.)/s(?:\s+eta\s+(.+))?', line)
 			m_kilodots = re.search('^\s*(\d+)K\s+([., ]*)', line)
 			m_completed = re.search(' saved \S+$', line)
+			m_redirect = re.search('^Location: (\S+)', line)
 			
 			if m_length:
 				self.size = int(m_length.group(1))
@@ -614,6 +616,10 @@ class Download(object):
 				self.eta_str = ''
 				refresh = True
 				on_completed_download(self)
+			if m_redirect:
+				self.actual_url = m_redirect.group(1)
+				refresh = True
+			
 			if self.lastline != line:
 				refresh = True
 			self.lastline = line
@@ -763,7 +769,7 @@ def refresh_download_state(dlobj, doAll=False):
 		row = DownLoadList[it]
 		if doAll or dl == dlobj:
 			if dl.outfile is None:
-				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.original_url).path))
+				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.actual_url).path))
 			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
 			row[COL_FILE_ICON] = gtk.STOCK_FILE
@@ -817,14 +823,14 @@ def continous_refresh():
 		time.sleep(60)
 
 def on_ended_download(dl):
-	this_host = urlparse.urlparse(dl.original_url).hostname
+	this_host = urlparse.urlparse(dl.actual_url).hostname
 	start_dl = None
-	for it, dl in iter_downloadlist():
-		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.original_url).hostname:
+	for it, dl in sorted(iter_downloadlist(), key=lambda (it, dl): dl.added_ts):
+		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.actual_url).hostname:
 			if dl['status'] in [S_INIT, S_DL]:
 				start_dl = None
 				break
-			if dl['status'] in [S_QUEUE]:
+			if start_dl is None and dl['status'] in [S_QUEUE]:
 				start_dl = dl
 	if start_dl is not None:
 		start_dl.start()
@@ -847,7 +853,7 @@ def DownLoadList_append_new(d):
 	# it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), 
 	#   '', 0, 0, -1, '', 
 	#   -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
-	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '', -1, '', '', '', '']
+	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '',  -1, '', '', '', '']
 	for idx, val in d.iteritems():
 		row[idx] = val
 	return DownLoadList.append(row)
@@ -1159,7 +1165,7 @@ win_main = gtk.Window()
 box_main = gtk.VBox()
 main_toolbar = gtk.Toolbar()
 scroller = gtk.ScrolledWindow()
-DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, int, str, str, float, int, float, str, int, str, str, str, str)
+DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str)
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
