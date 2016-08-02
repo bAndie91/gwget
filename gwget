@@ -324,7 +324,7 @@ def str_accurate_at_time(ts):
 			fmt = '%b. %d'
 	else:
 		fmt = '%Y %b.'
-	return time.strftime(fmt)
+	return time.strftime(fmt, then)
 
 ## OS functions
 
