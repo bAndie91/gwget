@@ -1,0 +1,210 @@
+msgid ""
+msgstr ""
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# file: gwget, line: 41
+msgid "Error"
+msgstr "Hiba"
+
+# file: gwget, line: 53
+msgid "Question"
+msgstr "Kérdés"
+
+# file: gwget, line: 90
+msgid "Working Dir"
+msgstr "Munkakönyvtár"
+
+# file: gwget, line: 715
+msgid "Running downloads will continue in the background.\nQuit anyway?"
+msgstr "A futó letöltések a háttérben tovább folytatódnak.\nMégis kilépsz?"
+
+# file: gwget, line: 938
+msgid "Would you like to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
+msgstr "<b>Törlöd</b> a <b>kész</b> fájlt?\nURL: <tt>%s</tt>\nFájl: <tt>%s</tt>"
+
+# file: gwget, line: 945
+msgid "This download is not completed.\nWould you like to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
+msgstr "Ez a letöltés nincs kész.\n<b>Törlöd</b> a <b>részleges</b> fájlt?\nURL: <tt>%s</tt>\nFájl: <tt>%s</tt>"
+
+# file: gwget, line: 966
+msgid "Log - %s"
+msgstr "Napló - %s"
+
+# file: gwget, line: 1137
+msgid "Queued"
+msgstr "Vár"
+
+# file: gwget, line: 1138
+msgid "Init"
+msgstr "Kezdés"
+
+# file: gwget, line: 1139
+msgid "Download"
+msgstr "Letölt"
+
+# file: gwget, line: 1140
+msgid "Saved"
+msgstr "Mentve"
+
+# file: gwget, line: 1141
+msgid "Failed"
+msgstr "Hibás"
+
+# file: gwget, line: 1142
+msgid "Paused"
+msgstr "Áll"
+
+# file: gwget, line: 1173
+msgid "Open Folder"
+msgstr "Könyvtár megnyitása"
+
+# file: gwget, line: 1174
+msgid "Delete File"
+msgstr "Fájl törlése"
+
+# file: gwget, line: 1175
+msgid "Re-download"
+msgstr "Letöltés újra"
+
+# file: gwget, line: 1176
+msgid "Resume"
+msgstr "Indít"
+
+# file: gwget, line: 1177
+msgid "Pause"
+msgstr "Megállít"
+
+# file: gwget, line: 1178
+msgid "Clear"
+msgstr "Elfelejt"
+
+# file: gwget, line: 1179
+msgid "Show Log"
+msgstr "Napló"
+
+# file: gwget, line: 1185
+msgid "Downloads"
+msgstr "Letöltések"
+
+# file: gwget, line: 1199
+msgid "Resume All"
+msgstr "Mindet elindít"
+
+# file: gwget, line: 1200
+msgid "Pause All"
+msgstr "Mindet megállít"
+
+# file: gwget, line: 1201
+msgid "Clear Completed"
+msgstr "Befejezettek elfelejtése"
+
+# file: gwget, line: 1217
+msgid "Filename"
+msgstr "Fájlnév"
+
+# file: gwget, line: 1229
+msgid "Progress"
+msgstr "Haladás"
+
+# file: gwget, line: 1239
+msgid "Status"
+msgstr "Állapot"
+
+# file: gwget, line: 1250
+msgid "Speed"
+msgstr "Sebesség"
+
+# file: gwget, line: 1258
+msgid "Added"
+msgstr "Hozzáadva"
+
+# file: gwget, line: 1266
+msgid "ETA"
+msgstr "ETA"
+
+# file: gwget, line: 1274
+msgid "Message"
+msgstr "Megjegyzés"
+
+# file: gwget, line: 1332
+msgid "URLs"
+msgstr "Linkek"
+
+# file: gwget, line: 1334
+msgid "Target Folder"
+msgstr "Célkönyvtár"
+
+# file: gwget, line: 1336
+msgid "Bandwidth limit"
+msgstr "Sávszél max"
+
+# file: gwget, line: 1342
+msgid "Cookie file"
+msgstr "Cookie fájl"
+
+# file: gwget, line: 1343
+msgid "Custom Cookies per line in NAME=VALUE format:"
+msgstr "További Cookie-k soronként NÉV=ÉRTÉK formában:"
+
+# file: gwget, line: 1346
+msgid "POST parameters per line in NAME=VALUE format:\nURL encoding is not necessary"
+msgstr "POST paraméterek soronként NÉV=ÉRTÉK formában:\nURL enkódolás szükségtelen"
+
+# file: gwget, line: 1350
+msgid "Attempts"
+msgstr "Próbálkozások"
+
+# file: gwget, line: 1354
+msgid "Username"
+msgstr "Felhasználónév"
+
+# file: gwget, line: 1355
+msgid "Password"
+msgstr "Jelszó"
+
+# file: gwget, line: 1359
+msgid "Custom options"
+msgstr "Egyéb opciók"
+
+# file: gwget, line: 1359
+msgid "type further options for wget\nsee 'wget --help' or 'man wget'"
+msgstr "további opciók a wget számára\nlásd 'wget --help', 'man wget'"
+
+# file: gwget, line: 1360
+msgid "Run on complete"
+msgstr "Parancs amikor kész"
+
+# file: gwget, line: 1360
+msgid "type a shell command-line\npair of curly brackets are substituted with downloaded file name\nexample: xdg-open {} && rm {}"
+msgstr "egy shell parancssort adj meg\na kapcsos zárójel párok a letöltött fájl nevére ki lesznek cserélve\npéldául: xdg-open {} && rm {}"
+
+# file: gwget, line: 1364
+msgid "Queue"
+msgstr "Sorba állít"
+
+# file: gwget, line: 1370
+msgid "New Download"
+msgstr "Új letöltés"
+
+# file: gwget, line: 1382
+msgid "kB/s <small><i>(0 = unlimited)</i></small>"
+msgstr "kB/s <small><i>(0 = korlátlan)</i></small>"
+
+# file: gwget, line: 1383
+msgid "<small><i>(0 = infinite)</i></small>"
+msgstr "<small><i>(0 = végtelen)</i></small>"
+
+# file: gwget, line: 1414
+msgid "Basic"
+msgstr "Alap"
+
+# file: gwget, line: 1423
+msgid "Cookies"
+msgstr "Cookie-k"
+
+# file: gwget, line: 1431
+msgid "Advanced"
+msgstr "Haladó"
+

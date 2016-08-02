@@ -935,14 +935,14 @@ def act_pause(it, dl):
 
 def act_remove_download(it, dl, force=False):
 	if not dl.running and dl.outfile is not None:
-		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?"), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
+		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
 def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nURL: <tt>%s</tt>\nWould you like to <b>delete partial</b> download?" % (glib.markup_escape_text(dl.original_url))), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
+				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
@@ -1127,6 +1127,7 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 ### Main ###
 
 PROGNAME = 'gwget'
+gettext.textdomain(PROGNAME)
 _ = gettext.gettext
 LastFolder = os.getcwd()
 XATTR_CHARSET = 'user.mime_encoding'
@@ -1331,7 +1332,7 @@ page1 = gtk.VBox()
 p1x1 = gtk.HBox()
 p1l1 = gtk.Label(_("URLs"))
 p1t1 = ScrolledTextView()
-p1c1 = FileChooserEntry(label=_("Select a Folder"), path=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+p1c1 = FileChooserEntry(label=_("Target Folder"), path=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 p1x2 = gtk.HBox(spacing=2)
 p1l2a = gtk.Label(_("Bandwidth limit"))
 p1a2 = gtk.Adjustment(value=0, lower=0, upper=gobject.constants.G_MAXINT, step_incr=1, page_incr=10)
@@ -1340,10 +1341,10 @@ p1l2b = gtk.Label()
 page2 = gtk.VBox()
 p2x1 = gtk.VBox()
 p2c1 = FileChooserEntry(label=_("Cookie file"), action=gtk.FILE_CHOOSER_ACTION_OPEN)
-p2l1 = gtk.Label(_("Type custom Cookies per line in NAME=VALUE format:"))
+p2l1 = gtk.Label(_("Custom Cookies per line in NAME=VALUE format:"))
 p2t1 = ScrolledTextView()
 page3 = gtk.VBox()
-p3l1 = gtk.Label(_("Type POST parameters per line in NAME=VALUE format:\nURL encoding is not necessary"))
+p3l1 = gtk.Label(_("POST parameters per line in NAME=VALUE format:\nURL encoding is not necessary"))
 p3t1 = ScrolledTextView()
 page4 = gtk.VBox()
 p4x1 = gtk.HBox(spacing=2)

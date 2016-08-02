@@ -1,0 +1,16 @@
+Package: gwget
+Priority: optional
+Section: net
+Installed-Size: 
+Maintainer: Andras Hrubak <andreas@uucp.hu>
+Architecture: all
+Version: 0.1
+Depends: python-gtk2, wget
+Recommends: mimeopen-gui, python-xattr
+Suggests: 
+Provides: 
+Replaces: 
+Conflicts: 
+Homepage: 
+Vcs-Browser: https://github.com/bAndie91/gwget
+Description: Gtk frontend for wget

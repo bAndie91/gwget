@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=gwget
+Exec=gwget %U
+Icon=emblem-downloads
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;x-scheme-handler/ftps;
+StartupNotify=true
