@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2.7
 
 import os
 import sys
@@ -573,10 +573,10 @@ class Download(object):
 			if m_length:
 				self.size = int(m_length.group(1))
 			if m_name1:
-				self.outfile = m_name1.group(1)
+				self.outfile = m_name1.group(1).decode('string-escape')
 				refresh = True
 			if m_name2:
-				self.outfile = m_name2.group(1)
+				self.outfile = m_name2.group(1).decode('string-escape')
 				self.completed = True
 				self.eta = -1
 				self.eta_str = ''
