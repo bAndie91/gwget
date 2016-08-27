@@ -17,6 +17,10 @@ import functools
 import urllib
 import urlparse
 import pickle
+try:
+	import xattr
+except ImportError:
+	xattr = None
 
 
 def add_key_binding(widget, keyname, callback):
@@ -389,6 +393,30 @@ def convert_to_bytes(s, p='b'):
 	b = float(m.group(1)) * prefix[m.group(2).lower() or 'b']
 	return b / prefix[p]
 
+def set_xattrs_file(filename, attrs):
+	fh = open(filename, 'r')
+	try:
+		set_xattrs(fh, attrs, filename)
+	except:
+		raise
+	finally:
+		fh.close()
+
+def set_xattrs(fh, attrs, filename='-'):
+	if xattr is not None:
+		for attrname, attrval in attrs.iteritems():
+			try:
+				if attrval is None:
+					try:
+						xattr.removexattr(fh, attrname)
+					except IOError, e:
+						if e.errno != os.errno.ENODATA:
+							raise e
+				else:
+					xattr.setxattr(fh, attrname, attrval)
+			except IOError, e:
+				stderr(_("Notice: can not set xattr '%s' on '%s': %s\n") % (attrname, filename, str(e)))
+
 ### Private methods ###
 
 class Download(object):
@@ -436,9 +464,13 @@ class Download(object):
 	def __setitem__(self, key, val):
 		self.Lock.acquire(True)
 		if key == 'status' and hasattr(self, '_status'):
-			if (self._status == S_STOP and val == S_DL) or (val == S_ERR and self._status in [S_SAVED, S_STOP]):
+			if (self._status == S_STOP and val == S_DL) or (self._status in [S_SAVED, S_STOP] and val == S_ERR):
+				# Do not change status S_STOP -> S_DL ; S_SAVED -> S_ERR ; S_STOP -> S_ERR ;
 				self.Lock.release()
 				return False
+			if self._status == S_INIT and val == S_DL:
+				# Set xAttributes when just started to download
+				setxattributes(self)
 		setattr(self, '_' + key, val)
 		self.Lock.release()
 		return True
@@ -835,7 +867,14 @@ def on_ended_download(dl):
 	if start_dl is not None:
 		start_dl.start()
 
+def setxattributes(dl):
+	attrs = {XATTR_URI: dl.actual_url}
+	if dl.params.has_key('--referer'):
+		attrs[XATTR_REFERER] = dl.params['--referer']
+	set_xattrs_file(dl.outfile, attrs)
+
 def on_completed_download(dl):
+	setxattributes(dl)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
 		SQ = '\''
@@ -1130,7 +1169,8 @@ PROGNAME = 'gwget'
 gettext.textdomain(PROGNAME)
 _ = gettext.gettext
 LastFolder = os.getcwd()
-XATTR_CHARSET = 'user.mime_encoding'
+XATTR_URI = 'user.xdg.origin.url'
+XATTR_REFERER = 'user.xdg.referrer.url'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
 COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(16)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP = range(6)
