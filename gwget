@@ -21,6 +21,12 @@ try:
 	import xattr
 except ImportError:
 	xattr = None
+import dbus
+import dbus.service
+import dbus.glib
+
+PROGNAME = 'gwget'
+APPNAME = 'hu.uucp.gwget'
 
 
 def add_key_binding(widget, keyname, callback):
@@ -684,13 +690,16 @@ def win_main_show():
 	
 	# Load cached downloads from object dumps
 	import_downloads()
-	
+
 	# Parse CLI args
+	main_parse_cli(sys.argv)
+
+def main_parse_cli(argv):
 	cliURLs = []
 	cliOpts = []
 	idx = 1
-	while idx < len(sys.argv):
-		arg = sys.argv[idx]
+	while idx < len(argv):
+		arg = argv[idx]
 		if arg.startswith('-'):
 			m = re.search('([^=]+)=(.*)', arg)
 			if m:
@@ -698,8 +707,8 @@ def win_main_show():
 			else:
 				key = arg
 				val = None
-				if idx+1 < len(sys.argv):
-					argnext = sys.argv[idx+1]
+				if idx+1 < len(argv):
+					argnext = argv[idx+1]
 					if not argnext.startswith('-'):
 						val = argnext
 						idx += 1
@@ -722,23 +731,26 @@ def win_main_show():
 				params['--header'] += ['Cookie: ' + optval]
 			elif optnam == '--run-on-complete':
 				params['on_complete'] = optval
-			elif optnam in ParamWidgets.keys():
-				wdg, getter, putter = ParamWidgets[optnam]
-				if putter is None or putter(optval):
-					if getter is not None:
-						dummydata = getter('x')
-						if hasattr(dummydata, '__iter__'):
-							if not params.has_key(optnam):
-								params[optnam] = []
-							params[optnam] += [optval]
+			else:
+				if optnam in ShortLongOptions.keys():
+					optnam = ShortLongOptions[optnam]
+				if optnam in ParamWidgets.keys():
+					wdg, getter, putter = ParamWidgets[optnam]
+					if putter is None or putter(optval):
+						if getter is not None:
+							dummydata = getter('x')
+							if hasattr(dummydata, '__iter__'):
+								if not params.has_key(optnam):
+									params[optnam] = []
+								params[optnam] += [optval]
+							else:
+								params[optnam] = optval
 						else:
 							params[optnam] = optval
 					else:
-						params[optnam] = optval
+						params_def()
 				else:
 					params_def()
-			else:
-				params_def()
 		show_win_newdl()
 		reset_parameters(params)
 		p1t1.set_text('\n'.join(cliURLs)+'\n')
@@ -1160,12 +1172,22 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 	context.finish(success, False, time)
 	return True
 
+class GwgetService(dbus.service.Object):
+	def __init__(self, win_main):
+		self.win = win_main
+		bus_name = dbus.service.BusName(APPNAME, bus = dbus.SessionBus())
+		dbus.service.Object.__init__(self, bus_name, '/'+APPNAME.replace('.', '/'))
+	@dbus.service.method(dbus_interface = APPNAME)
+	def new_download(self, args):
+		gtk.threads_enter()
+		self.win.present()
+		main_parse_cli(args)
+		gtk.threads_leave()
 
 
 
 ### Main ###
 
-PROGNAME = 'gwget'
 gettext.textdomain(PROGNAME)
 _ = gettext.gettext
 LastFolder = os.getcwd()
@@ -1192,6 +1214,21 @@ StatusIcon = {
 }
 
 
+
+if '--help' in sys.argv or '-h' in sys.argv:
+	print """Usage: gwget [gwget options] [wget options]
+gwget options:
+  --proxy-url
+  --cookies
+  --run-on-complete"""
+	raise SystemExit(0)
+
+# Check if application is already running
+if dbus.SessionBus().request_name(APPNAME) != dbus.bus.REQUEST_NAME_REPLY_PRIMARY_OWNER:
+	stderr(_("Already running.")+'\n')
+	method = dbus.SessionBus().get_object(APPNAME, '/'+APPNAME.replace('.', '/')).get_dbus_method('new_download')
+	method(sys.argv)
+	raise SystemExit(0)
 
 gtk.gdk.threads_init()
 mkdir(CacheFolder)
@@ -1448,6 +1485,11 @@ ParamWidgets = {
 	'': (p4e7, lambda a: a.split(), lambda b: ' '.join(b) ),
 	'on_complete': (p4e8, None, None),
 }
+ShortLongOptions = {
+	'-P': '--directory-prefix',
+	'-t': '--tries',
+	'-U': '--user-agent',
+}
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
@@ -1490,4 +1532,5 @@ btns_newdl.pack_start(btn_new_no, 0, 1)
 
 
 win_main.show_all()
+dbus_service = GwgetService(win_main)
 gtk.main()
