@@ -1097,13 +1097,19 @@ def on_treeview_key(tree, event):
 	if event.keyval == gtk.gdk.keyval_from_name('Delete'):
 		act_on_selection(act_clear_download)
 		return True
+	rows = main_selection.get_selected_rows()[1]
 	if event.keyval == gtk.gdk.keyval_from_name('Menu'):
-		rows = main_selection.get_selected_rows()[1]
 		if len(rows) == 1:
 			it = DownLoadList.get_iter(rows[0])
 			x, y = tree.window.get_origin()
 			popup_context_menu(it, event, 3, placement_func=lambda d: (x, y, True))
 			return True
+	if event.keyval in map(gtk.gdk.keyval_from_name, ['Return', 'KP_Enter']):
+		if len(rows) == 1:
+			it = DownLoadList.get_iter(rows[0])
+			dl = DownLoadList[it][COL_DLOBJ]
+			act_open_file(it, dl)
+		return True
 	return False
 
 
