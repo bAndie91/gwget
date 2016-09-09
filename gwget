@@ -24,6 +24,9 @@ except ImportError:
 import dbus
 import dbus.service
 import dbus.glib
+import gio
+import mimetypes
+
 
 PROGNAME = 'gwget'
 APPNAME = 'hu.uucp.gwget'
@@ -454,6 +457,8 @@ class Download(object):
 		self.completed = False
 		self.running = False
 		self.size = None
+		self.mime_remote = None
+		self.mime_local = None
 		self.percent = -1
 		self.speed = 0
 		self.speed_str = ''
@@ -599,6 +604,7 @@ class Download(object):
 			
 			refresh = False
 			m_length = re.search('^Length: (\d+)', line)
+			m_mime = re.search('^Length:.*?\[(\S+?)\]', line)
 			m_name1 = re.search('^Saving to: .(.+).$', line)
 			m_name2 = re.search('^Server file no newer than local file .(.+). -- not retrieving\.$', line)
 			m_percent = re.search('^\s{0,2}(\d+)(\.\d+)?%', line)
@@ -610,6 +616,8 @@ class Download(object):
 			
 			if m_length:
 				self.size = int(m_length.group(1))
+			if m_mime:
+				self.mime_remote = m_mime.group(1)
 			if m_name1:
 				self.outfile = m_name1.group(1).decode('string-escape')
 				refresh = True
@@ -769,8 +777,8 @@ def import_downloads():
 			fh = open(f, 'r')
 			obj = pickle.load(fh)
 			fh.close()
-			DownLoadList_append_new({COL_DLOBJ: obj})
 			obj.resurgo()
+			DownLoadList_append_new({COL_DLOBJ: obj})
 	refresh_download_state(None, doAll=True)
 
 def export_downloads():
@@ -816,7 +824,27 @@ def refresh_download_state(dlobj, doAll=False):
 				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.actual_url).path))
 			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
-			row[COL_FILE_ICON] = gtk.STOCK_FILE
+			tvc1.queue_resize()
+			
+			if dl.mime_local is None:
+				if dl.completed:
+					mime, x = mimetypes.guess_type(dl.outfile)
+					dl.mime_local = mime
+				else:
+					mime = dl.mime_remote
+			else:
+				mime = dl.mime_local
+			mime = mime or 'application/octet-stream'
+			icon = gio.content_type_get_icon(mime)
+			theme = gtk.icon_theme_get_default()
+			info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
+			if info is not None:
+				row[COL_FILE_ICON] = None
+				row[COL_PXB] = info.load_icon()
+			else:
+				row[COL_PXB] = None
+				row[COL_FILE_ICON] = gtk.STOCK_FILE
+			
 			if dl.percent >= 0:
 				row[COL_PULSE] = -1
 				row[COL_PERCENT] = dl.percent
@@ -1000,6 +1028,7 @@ def act_clear_download(it, dl):
 		if dl.logfile is not None:
 			untrack_download_file(dl)
 		del DownLoadList[it]
+		tvc1.queue_resize()
 
 def untrack_download_file(dl):
 	delete(get_dumpfile(dl))
@@ -1298,18 +1327,18 @@ x, x, x, x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, 
 on_selection_change(main_selection)
 
 
-tvc = gtk.TreeViewColumn(_("Filename"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_NAME)
-tvc.set_sort_indicator(True)
+tvc1 = gtk.TreeViewColumn(_("Filename"))
+tvc1.set_resizable(True)
+tvc1.set_sort_column_id(COL_NAME)
+tvc1.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_pix, False)
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_NAME)
-tvc.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
-tvc.add_attribute(cr_pix, 'pixbuf', COL_PXB)
-main_list.append_column(tvc)
+tvc1.pack_start(cr_pix, False)
+tvc1.pack_start(cr_txt, True)
+tvc1.add_attribute(cr_txt, 'text', COL_NAME)
+tvc1.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
+tvc1.add_attribute(cr_pix, 'pixbuf', COL_PXB)
+main_list.append_column(tvc1)
 tvc = gtk.TreeViewColumn(_("Progress"))
 tvc.set_resizable(True)
 tvc.set_sort_column_id(COL_PERCENT)
