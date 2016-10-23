@@ -694,7 +694,7 @@ def win_main_show():
 	# Parse CLI args
 	main_parse_cli(sys.argv)
 
-def main_parse_cli(argv):
+def main_parse_cli(argv, append_url = False):
 	cliURLs = []
 	cliOpts = []
 	idx = 1
@@ -752,8 +752,9 @@ def main_parse_cli(argv):
 				else:
 					params_def()
 		show_win_newdl()
+		old_urls = p1t1.get_text()
 		reset_parameters(params)
-		p1t1.set_text('\n'.join(cliURLs)+'\n')
+		p1t1.set_text((old_urls if append_url else '') + '\n'.join(cliURLs)+'\n')
 
 def act_quit():
 	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
@@ -886,7 +887,8 @@ def setxattributes(dl):
 	set_xattrs_file(dl.outfile, attrs)
 
 def on_completed_download(dl):
-	setxattributes(dl)
+	if os.path.exists(dl.outfile):
+		setxattributes(dl)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
 		SQ = '\''
@@ -1181,7 +1183,7 @@ class GwgetService(dbus.service.Object):
 	def new_download(self, args):
 		gtk.threads_enter()
 		self.win.present()
-		main_parse_cli(args)
+		main_parse_cli(args, append_url = True)
 		gtk.threads_leave()
 
 
