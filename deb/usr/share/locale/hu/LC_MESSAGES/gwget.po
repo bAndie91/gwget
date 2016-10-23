@@ -208,3 +208,6 @@ msgstr "Cookie-k"
 msgid "Advanced"
 msgstr "Haladó"
 
+# file: gwget, line: 1228
+msgid "Already running."
+msgstr "Már fut."
