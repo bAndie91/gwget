@@ -691,14 +691,14 @@ def win_main_show():
 	# Manage GUI
 	btn_remove.hide()
 	
+	# Load cached downloads from object dumps
+	import_downloads()
+
 	# Start background thread
 	continous_refresh_thread = threading.Thread(target=continous_refresh, args=())
 	continous_refresh_thread.daemon = True
 	continous_refresh_thread.start()
 	
-	# Load cached downloads from object dumps
-	import_downloads()
-
 	# Parse CLI args
 	main_parse_cli(sys.argv)
 
@@ -759,10 +759,13 @@ def main_parse_cli(argv, append_url = False):
 						params_def()
 				else:
 					params_def()
-		show_win_newdl()
-		old_urls = p1t1.get_text()
+		urls = '\n'.join(cliURLs) + '\n'
+		if win_newdl.props.visible and append_url:
+			old_urls = p1t1.get_text()
+			urls = old_urls + ('' if old_urls[-1] == '\n' else '\n') + urls
 		reset_parameters(params)
-		p1t1.set_text((old_urls if append_url else '') + '\n'.join(cliURLs)+'\n')
+		p1t1.set_text(urls)
+		show_win_newdl()
 
 def act_quit():
 	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
@@ -827,7 +830,7 @@ def refresh_download_state(dlobj, doAll=False):
 				row[COL_NAME] = os.path.basename(dl.outfile)
 			tvc1.queue_resize()
 			
-			if dl.mime_local is None:
+			if not(hasattr(dl, 'mime_local') and dl.mime_local is not None):
 				if dl.completed:
 					mime, x = mimetypes.guess_type(dl.outfile)
 					dl.mime_local = mime
