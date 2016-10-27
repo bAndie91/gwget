@@ -1221,7 +1221,8 @@ class GwgetService(dbus.service.Object):
 	@dbus.service.method(dbus_interface = APPNAME)
 	def new_download(self, args):
 		gtk.threads_enter()
-		self.win.present()
+		if len(args) < 2:
+			self.win.present()
 		main_parse_cli(args, append_url = True)
 		gtk.threads_leave()
 
