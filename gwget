@@ -26,6 +26,7 @@ import dbus.service
 import dbus.glib
 import gio
 import mimetypes
+import setproctitle
 
 
 PROGNAME = 'gwget'
@@ -1228,6 +1229,7 @@ class GwgetService(dbus.service.Object):
 
 ### Main ###
 
+setproctitle.setproctitle(PROGNAME)
 gettext.textdomain(PROGNAME)
 _ = gettext.gettext
 LastFolder = os.getcwd()
@@ -1509,10 +1511,10 @@ btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 ParamWidgets = {
 	'--directory-prefix': (p1c1, lambda a: a if a!='' else os.getcwd(), None),
 	'--load-cookies': (p2c1, None, None),
-	'--header': (p2t1, \
-		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))],\
+	'--header': (p2t1,\
+		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
 		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n' ),
-	'--post-data': (p3t1, \
+	'--post-data': (p3t1,\
 		lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
 		lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n' ),
 	'--tries': (p4s1, None, lambda b: int(b) ),
