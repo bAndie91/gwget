@@ -1401,6 +1401,7 @@ tvc.pack_start(cr_txt, True)
 tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
 main_list.append_column(tvc)
 
+DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
 main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
 main_list.connect('button-press-event', on_treeview_click)
