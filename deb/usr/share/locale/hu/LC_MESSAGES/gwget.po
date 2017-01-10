@@ -211,3 +211,11 @@ msgstr "Haladó"
 # file: gwget, line: 1228
 msgid "Already running."
 msgstr "Már fut."
+
+# file: gwget, line: 1487
+msgid "Output"
+msgstr "Kimenet"
+
+# file: gwget, line: 1487
+msgid "Left empty to use filename provided by server"
+msgstr "Hagyd üresen a szerveroldali fájlnév használatához"
