@@ -21,11 +21,11 @@ msgid "Running downloads will continue in the background.\nQuit anyway?"
 msgstr "A futó letöltések a háttérben tovább folytatódnak.\nMégis kilépsz?"
 
 # file: gwget, line: 938
-msgid "Would you like to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
+msgid "Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
 msgstr "<b>Törlöd</b> a <b>kész</b> fájlt?\nURL: <tt>%s</tt>\nFájl: <tt>%s</tt>"
 
 # file: gwget, line: 945
-msgid "This download is not completed.\nWould you like to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
+msgid "This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>"
 msgstr "Ez a letöltés nincs kész.\n<b>Törlöd</b> a <b>részleges</b> fájlt?\nURL: <tt>%s</tt>\nFájl: <tt>%s</tt>"
 
 # file: gwget, line: 966

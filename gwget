@@ -61,7 +61,7 @@ def display_error(e):
 class DialogCancel(Exception):
 	pass
 
-def question(msg, yes=None, parent=None, cancelable=False, default=gtk.RESPONSE_YES):
+def question(msg, parent=None, yes=None, no=None, cancelable=False, default=gtk.RESPONSE_YES):
 	dlg = gtk.MessageDialog(parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_NONE)
 	dlg.set_markup(msg)
 	dlg.set_title(_("Question"))
@@ -74,7 +74,15 @@ def question(msg, yes=None, parent=None, cancelable=False, default=gtk.RESPONSE_
 			btn_yes.show()
 		else:
 			dlg.add_buttons(yes, gtk.RESPONSE_YES)
-	dlg.add_buttons(gtk.STOCK_NO, gtk.RESPONSE_NO)
+	if no is None:
+		dlg.add_buttons(gtk.STOCK_NO, gtk.RESPONSE_NO)
+	else:
+		if type(no) in [type(()), type([])]:
+			btn_no = StockButton(label=no[0], stock=no[1])
+			dlg.add_action_widget(btn_no, gtk.RESPONSE_NO)
+			btn_no.show()
+		else:
+			dlg.add_buttons(no, gtk.RESPONSE_NO)
 	if cancelable:
 		dlg.add_buttons(gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL)
 		add_key_binding(dlg, 'Escape', lambda a,b,c,d: dlg.response(gtk.RESPONSE_CANCEL) or True)
@@ -501,12 +509,12 @@ class Download(object):
 	def __setitem__(self, key, val):
 		self.Lock.acquire(True)
 		if key == 'status' and hasattr(self, '_status'):
+			# Do not change status S_STOP -> S_DL ; S_SAVED -> S_ERR ; S_STOP -> S_ERR ;
 			if (self._status == S_STOP and val == S_DL) or (self._status in [S_SAVED, S_STOP] and val == S_ERR):
-				# Do not change status S_STOP -> S_DL ; S_SAVED -> S_ERR ; S_STOP -> S_ERR ;
 				self.Lock.release()
 				return False
 			if self._status == S_INIT and val == S_DL:
-				# Set xAttributes when just started to download
+				# Set xAttributes when downloading just started
 				setxattributes(self)
 		setattr(self, '_' + key, val)
 		self.Lock.release()
@@ -929,10 +937,13 @@ def on_ended_download(dl):
 	start_dl = None
 	for it, dl in sorted(iter_downloadlist(), key=lambda (it, dl): dl.added_ts):
 		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.actual_url).hostname:
+			# it is a DL on the same host as the finished one
 			if dl['status'] in [S_INIT, S_DL]:
+				# if there is at least one DL initializing or downloading, then stop lookup
 				start_dl = None
 				break
 			if start_dl is None and dl['status'] in [S_QUEUE]:
+				# it is a queued DL, start it unless an other DL matched above
 				start_dl = dl
 	if start_dl is not None:
 		start_dl.start()
@@ -1015,6 +1026,8 @@ def act_pause_all():
 	for it, dl in iter_downloadlist():
 		if dl.running:
 			act_pause(None, dl)
+		elif dl['status'] == S_QUEUE:
+			dl.params['runnable'] = False
 
 def act_clear_completed():
 	for it, dl in iter_downloadlist():
@@ -1045,14 +1058,14 @@ def act_pause(it, dl):
 
 def act_remove_download(it, dl, force=False):
 	if not dl.running and dl.outfile is not None:
-		if not dl.completed or force or question(_("Would you like to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
+		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
 def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nWould you like to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, cancelable=True, default=gtk.RESPONSE_CANCEL):
+				if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
