@@ -8,6 +8,8 @@
 * `Ctrl-P` - Show the parameters of the selected download
 * `Ctrl-O` - Options
 * `Ctrl-Q` - Quit
+* `Delete` - Remove download (entry only, not file)
+* `Return` - Open downloaded file
 * `Ctrl-Enter` - On New download dialog - Start downloading
 * `Ctrl-Shift-Enter` - On New download dialog - Queue downloads
 

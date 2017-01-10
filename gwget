@@ -133,6 +133,30 @@ def choose_folder(folder=None):
 def choose_open_file(folder=None):
 	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN, folder=folder)
 
+class FileEntryCompletion(gtk.EntryCompletion):
+	def __init__(self, entry):
+		assert(isinstance(entry, gtk.Entry))
+		super(self.__class__, self).__init__()
+		self.set_popup_completion(True)
+		self.model = gtk.ListStore(str)
+		self.set_model(self.model)
+		self.set_text_column(0)
+		entry.set_completion(self)
+		entry.connect('changed', self.edited)
+	def edited(self, entry):
+		olddir = entry.get_data('saved-dirname')
+		curdir = os.path.dirname(entry.get_text())
+		if olddir != curdir:
+			entry.set_data('saved-dirname', curdir)
+			self.model.clear()
+			try:
+				for f in os.listdir(curdir):
+					p = os.path.join(curdir, f)
+					if os.path.isdir(p): p += '/'
+					self.model.append([p])
+			except OSError:
+				entry.set_data('saved-dirname', None)
+
 class FileChooserEntry(gtk.HBox):
 	def __init__(self, label='', path='', action=gtk.FILE_CHOOSER_ACTION_OPEN):
 		super(self.__class__, self).__init__(spacing=2)
@@ -141,6 +165,7 @@ class FileChooserEntry(gtk.HBox):
 		self.Label.set_padding(2, 8)
 		self.Entry = gtk.Entry()
 		self.Entry.set_text(path)
+		self.pathcompleter = FileEntryCompletion(self.Entry)
 		self.Button = StockButton(label='', stock=gtk.STOCK_OPEN, icon_size=gtk.ICON_SIZE_MENU)
 		self.Button.connect('clicked', self.choose, action)
 		self.pack_start(self.Label, 0, 0)
@@ -952,7 +977,7 @@ def start_new_download(url, params, start=True):
 	return it
 
 def reset_parameters(params={}):
-	for wdg in p1t1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
+	for wdg in p1t1, p1e1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
 		wdg.set_text('')
 	p1s2.set_value(0)
 	p4s1.set_value(1)
@@ -968,7 +993,7 @@ def reset_parameters(params={}):
 			# TODO workaround for non-Cookie --header's
 
 def show_win_newdl():
-	win_newdl.show_all()
+	win_newdl.show()
 	for n in reversed(range(0, note.get_n_pages())):
 		note.set_current_page(n)
 	p1t1.grab_focus()
@@ -1107,6 +1132,12 @@ def popup_context_menu(it, event, button=None, placement_func=None):
 	cmi_clear.set_sensitive(not dl.running)
 	if button is None: button = event.button
 	ContextMenu.popup(None, None, placement_func, button, event.time)
+
+def on_urls_edited(buf):
+	if len(p1t1.get_text().split()) > 1:
+		p1e1.hide()
+	else:
+		p1e1.show()
 
 def on_treeview_click(tree, event):
 	if event_masked(event):
@@ -1453,6 +1484,7 @@ page1 = gtk.VBox()
 p1x1 = gtk.HBox()
 p1l1 = gtk.Label(_("URLs"))
 p1t1 = ScrolledTextView()
+p1e1 = LabelledEntry(label=_("Output"), tooltip=_("Left empty to use filename provided by server"))
 p1c1 = FileChooserEntry(label=_("Target Folder"), path=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 p1x2 = gtk.HBox(spacing=2)
 p1l2a = gtk.Label(_("Bandwidth limit"))
@@ -1501,6 +1533,7 @@ for label in p1l1, p2l1, p1l2a, p1l2b, p3l1, p4l1a, p4l1b:
 for spinner in p1s2, p4s1:
 	spinner.set_numeric(True)
 	spinner.set_alignment(1.0)
+p1t1.get_buffer().connect('changed', on_urls_edited)
 p1l2b.set_markup(_("kB/s <small><i>(0 = unlimited)</i></small>"))
 p4l1b.set_markup(_("<small><i>(0 = infinite)</i></small>"))
 p4e3.set_visibility(False)
@@ -1512,6 +1545,7 @@ btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
 ParamWidgets = {
 	'--directory-prefix': (p1c1, lambda a: a if a!='' else os.getcwd(), None),
+	'--output-document': (p1e1, lambda a: a if p1e1.get_visible() else '', None),
 	'--load-cookies': (p2c1, None, None),
 	'--header': (p2t1,\
 		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
@@ -1533,6 +1567,7 @@ ShortLongOptions = {
 	'-P': '--directory-prefix',
 	'-t': '--tries',
 	'-U': '--user-agent',
+	'-O': '--output-document',
 }
 
 # Pack new download window's widgets
@@ -1542,6 +1577,7 @@ note.append_page(page1, gtk.Label(_("Basic")))
 page1.pack_start(p1x1, 1, 1)
 p1x1.pack_start(p1l1, 0, 1)
 p1x1.pack_start(p1t1, 1, 1)
+page1.pack_start(p1e1, 0, 1)
 page1.pack_start(p1c1, 0, 1)
 page1.pack_start(p1x2, 0, 1)
 p1x2.pack_start(p1l2a, 0, 1)
@@ -1575,6 +1611,8 @@ btns_newdl.pack_start(btn_new_no, 0, 1)
 
 
 
+win_newdl.show_all()
+win_newdl.hide()
 win_main.show_all()
 dbus_service = GwgetService(win_main)
 gtk.main()
