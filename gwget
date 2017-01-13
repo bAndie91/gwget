@@ -988,7 +988,7 @@ def start_new_download(url, params, start=True):
 	return it
 
 def reset_parameters(params={}):
-	for wdg in p1t1, p1e1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
+	for wdg in p1t1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
 		wdg.set_text('')
 	p1s2.set_value(0)
 	p4s1.set_value(1)
@@ -1147,10 +1147,11 @@ def popup_context_menu(it, event, button=None, placement_func=None):
 	ContextMenu.popup(None, None, placement_func, button, event.time)
 
 def on_urls_edited(buf):
-	if len(p1t1.get_text().split()) > 1:
-		p1e1.hide()
-	else:
-		p1e1.show()
+	pass
+	#if len(p1t1.get_text().split()) > 1:
+	#	p1e1.hide()
+	#else:
+	#	p1e1.show()
 
 def on_treeview_click(tree, event):
 	if event_masked(event):
@@ -1497,7 +1498,7 @@ page1 = gtk.VBox()
 p1x1 = gtk.HBox()
 p1l1 = gtk.Label(_("URLs"))
 p1t1 = ScrolledTextView()
-p1e1 = LabelledEntry(label=_("Output"), tooltip=_("Left empty to use filename provided by server"))
+#p1e1 = LabelledEntry(label=_("Output"), tooltip=_("Left empty to use filename provided by server"))
 p1c1 = FileChooserEntry(label=_("Target Folder"), path=LastFolder, action=gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 p1x2 = gtk.HBox(spacing=2)
 p1l2a = gtk.Label(_("Bandwidth limit"))
@@ -1558,7 +1559,7 @@ btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
 ParamWidgets = {
 	'--directory-prefix': (p1c1, lambda a: a if a!='' else os.getcwd(), None),
-	'--output-document': (p1e1, lambda a: a if p1e1.get_visible() else '', None),
+	#'--output-document': (p1e1, lambda a: a if p1e1.get_visible() else '', None),
 	'--load-cookies': (p2c1, None, None),
 	'--header': (p2t1,\
 		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
@@ -1580,7 +1581,7 @@ ShortLongOptions = {
 	'-P': '--directory-prefix',
 	'-t': '--tries',
 	'-U': '--user-agent',
-	'-O': '--output-document',
+	#'-O': '--output-document',
 }
 
 # Pack new download window's widgets
@@ -1590,7 +1591,7 @@ note.append_page(page1, gtk.Label(_("Basic")))
 page1.pack_start(p1x1, 1, 1)
 p1x1.pack_start(p1l1, 0, 1)
 p1x1.pack_start(p1t1, 1, 1)
-page1.pack_start(p1e1, 0, 1)
+#page1.pack_start(p1e1, 0, 1)
 page1.pack_start(p1c1, 0, 1)
 page1.pack_start(p1x2, 0, 1)
 p1x2.pack_start(p1l2a, 0, 1)
