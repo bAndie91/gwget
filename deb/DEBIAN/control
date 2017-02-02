@@ -4,9 +4,9 @@ Section: net
 Installed-Size: 
 Maintainer: Andras Hrubak <andreas@uucp.hu>
 Architecture: all
-Version: 0.1
+Version: 0.2
 Depends: python-gtk2, wget
-Recommends: mimeopen-gui, python-xattr
+Recommends: mimeopen-gui | yazzy-xutils, python-xattr
 Suggests: 
 Provides: 
 Replaces: 

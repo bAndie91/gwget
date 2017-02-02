@@ -736,7 +736,7 @@ def win_main_show():
 	# Parse CLI args
 	main_parse_cli(sys.argv)
 
-def main_parse_cli(argv, append_url = False):
+def main_parse_cli(argv, append_url = False, cwd = None):
 	cliURLs = []
 	cliOpts = []
 	idx = 1
@@ -749,7 +749,7 @@ def main_parse_cli(argv, append_url = False):
 			else:
 				key = arg
 				val = None
-				if idx+1 < len(argv):
+				if key not in CliOptNotReqParam and idx+1 < len(argv):
 					argnext = argv[idx+1]
 					if not argnext.startswith('-'):
 						val = argnext
@@ -773,6 +773,8 @@ def main_parse_cli(argv, append_url = False):
 				params['--header'] += ['Cookie: ' + optval]
 			elif optnam == '--run-on-complete':
 				params['on_complete'] = optval
+			elif optnam == '--cwd-prefix':
+				params['--directory-prefix'] = cwd or os.getcwd()
 			else:
 				if optnam in ShortLongOptions.keys():
 					optnam = ShortLongOptions[optnam]
@@ -1264,11 +1266,11 @@ class GwgetService(dbus.service.Object):
 		bus_name = dbus.service.BusName(APPNAME, bus = dbus.SessionBus())
 		dbus.service.Object.__init__(self, bus_name, '/'+APPNAME.replace('.', '/'))
 	@dbus.service.method(dbus_interface = APPNAME)
-	def new_download(self, args):
+	def new_download(self, args, cwd):
 		gtk.threads_enter()
 		if len(args) < 2:
 			self.win.present()
-		main_parse_cli(args, append_url = True)
+		main_parse_cli(args, append_url=True, cwd=cwd)
 		gtk.threads_leave()
 
 
@@ -1300,6 +1302,8 @@ StatusIcon = {
 	S_ERR: gtk.STOCK_NO,
 	S_STOP: gtk.STOCK_MEDIA_PAUSE,
 }
+# gwget cli options not requiring parameter
+CliOptNotReqParam = ['--cwd-prefix']
 
 
 
@@ -1308,14 +1312,15 @@ if '--help' in sys.argv or '-h' in sys.argv:
 gwget options:
   --proxy-url
   --cookies
-  --run-on-complete"""
+  --run-on-complete
+  --cwd-prefix"""
 	raise SystemExit(0)
 
 # Check if application is already running
 if dbus.SessionBus().request_name(APPNAME) != dbus.bus.REQUEST_NAME_REPLY_PRIMARY_OWNER:
 	stderr(_("Already running.")+'\n')
 	method = dbus.SessionBus().get_object(APPNAME, '/'+APPNAME.replace('.', '/')).get_dbus_method('new_download')
-	method(sys.argv)
+	method(sys.argv, os.getcwd())
 	raise SystemExit(0)
 
 gtk.gdk.threads_init()
