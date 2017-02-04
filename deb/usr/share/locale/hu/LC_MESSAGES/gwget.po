@@ -216,6 +216,11 @@ msgstr "Már fut."
 msgid "Output"
 msgstr "Kimenet"
 
-# file: gwget, line: 1487
-msgid "Left empty to use filename provided by server"
-msgstr "Hagyd üresen a szerveroldali fájlnév használatához"
+# file: gwget, line: 1505
+msgid "Rename to"
+msgstr "Átnevezni erre"
+
+# file: gwget, line: 1505
+msgid "Left empty to use filename provided by server/wget"
+msgstr "Hagyd üresen a szerver/wget szerinti fájlnév használatához"
+
