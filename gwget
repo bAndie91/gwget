@@ -142,7 +142,7 @@ def choose_open_file(folder=None):
 	return choose_dialog(gtk.FILE_CHOOSER_ACTION_OPEN, folder=folder)
 
 class FileEntryCompletion(gtk.EntryCompletion):
-	def __init__(self, entry):
+	def __init__(self, entry, actiontype=gtk.FILE_CHOOSER_ACTION_OPEN):
 		assert(isinstance(entry, gtk.Entry))
 		super(self.__class__, self).__init__()
 		self.set_popup_completion(True)
@@ -151,6 +151,7 @@ class FileEntryCompletion(gtk.EntryCompletion):
 		self.set_text_column(0)
 		entry.set_completion(self)
 		entry.connect('changed', self.edited)
+		self.actiontype = actiontype
 	def edited(self, entry):
 		olddir = entry.get_data('saved-dirname')
 		curdir = os.path.dirname(entry.get_text())
@@ -160,7 +161,10 @@ class FileEntryCompletion(gtk.EntryCompletion):
 			try:
 				for f in os.listdir(curdir):
 					p = os.path.join(curdir, f)
-					if os.path.isdir(p): p += '/'
+					if os.path.isdir(p):
+						p += '/'
+					elif self.actiontype in [gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER, gtk.FILE_CHOOSER_ACTION_CREATE_FOLDER]:
+						continue
 					self.model.append([p])
 			except OSError:
 				entry.set_data('saved-dirname', None)
@@ -173,11 +177,14 @@ class FileChooserEntry(gtk.HBox):
 		self.Label.set_padding(2, 8)
 		self.Entry = gtk.Entry()
 		self.Entry.set_text(path)
-		self.pathcompleter = FileEntryCompletion(self.Entry)
+		self.pathcompleter = FileEntryCompletion(self.Entry, action)
 		self.Button = StockButton(label='', stock=gtk.STOCK_OPEN, icon_size=gtk.ICON_SIZE_MENU)
 		self.Button.connect('clicked', self.choose, action)
 		self.pack_start(self.Label, 0, 0)
 		self.pack_start(self.Entry, 1, 1)
+		self.MenuBtn = gtk.MenuToolButton(None, None)
+		self.MenuBtn.children()[0].remove(self.MenuBtn.children()[0].children()[0])
+		self.pack_start(self.MenuBtn, 0, 0)
 		self.pack_start(self.Button, 0, 0)
 	def get_text(self):
 		return self.Entry.get_text()
@@ -191,6 +198,18 @@ class FileChooserEntry(gtk.HBox):
 		p = choose_dialog(action, path=self.Entry.get_text())
 		if p is not None:
 			self.set_text(p)
+	def set_history(self, items):
+		historymenu = self.MenuBtn.get_menu()
+		if historymenu is None:
+			historymenu = gtk.Menu()
+			self.MenuBtn.set_menu(historymenu)
+		for menuitem in historymenu.get_children():
+			historymenu.remove(menuitem)
+		for label in items:
+			menuitem = gtk.MenuItem(label)
+			menuitem.connect('activate', lambda mi: self.set_text(mi.get_label()))
+			historymenu.append(menuitem)
+		historymenu.show_all()
 
 class ScrolledTextView(gtk.ScrolledWindow):
 	def __init__(self):
@@ -1019,13 +1038,14 @@ def reset_parameters(params={}):
 				wdg.set_value(data)
 			elif data:
 				wdg.set_text(data)
-			# TODO workaround for non-Cookie --header's
+			# TODO: workaround for non-Cookie --header's
 
 def show_win_newdl():
 	win_newdl.show()
 	for n in reversed(range(0, note.get_n_pages())):
 		note.set_current_page(n)
 	p1t1.grab_focus()
+	p1c1.set_history(LastFolders)
 
 
 
@@ -1210,8 +1230,12 @@ def on_treeview_key(tree, event):
 	return False
 
 
-## New download window
+## New Download window
 def new_download(start=True, open=False):
+	selected_folder = p1c1.get_text()
+	if selected_folder in LastFolders: LastFolders.remove(selected_folder)
+	LastFolders.insert(0, selected_folder)
+	
 	params = {}
 	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
 		data = wdg.get_text()
@@ -1296,6 +1320,7 @@ setproctitle.setproctitle(PROGNAME)
 gettext.textdomain(PROGNAME)
 _ = gettext.gettext
 LastFolder = os.getcwd()
+LastFolders = [LastFolder]
 XATTR_URI = 'user.xdg.origin.url'
 XATTR_REFERER = 'user.xdg.referrer.url'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
