@@ -1,4 +1,5 @@
 #!/usr/bin/env python2.7
+# -*- coding: UTF-8 -*-
 
 import os
 import sys
@@ -18,15 +19,18 @@ import urllib
 import urlparse
 import pickle
 try:
-	import xattr
+ import xattr
 except ImportError:
-	xattr = None
+ xattr = None
 import dbus
 import dbus.service
 import dbus.glib
 import gio
-import mimetypes
+from mimetypes import guess_extension
+import magic
 import setproctitle
+import glob
+import base64
 
 
 PROGNAME = 'gwget'
@@ -39,19 +43,22 @@ def add_key_binding(widget, keyname, callback):
 	accelgroup.connect_group(key, modifier, gtk.ACCEL_VISIBLE, callback)
 	widget.add_accel_group(accelgroup)
 
-def display_error(e):
+def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
 	text = None
 	if isinstance(e, OSError) or isinstance(e, IOError):
-		text = '%s (#%d)\n%s' % (e.strerror, e.errno, e.filename or '; '.join(e.filenames or []))
+		text = '%s (%d)\n%s' % (e.strerror, e.errno, e.filename or '; '.join(e.filenames or []))
 	elif isinstance(e, Exception):
 		text = e.message
 	elif type(e) == type([]):
 		text = ''.join(e)
 	if text is None:
 		text = str(e)
-	dlg = gtk.MessageDialog(None, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, text)
+	if isinstance(e, BaseException):
+		text = e.__class__.__module__ + '.' + e.__class__.__name__ + ':\n' + text
+	dlg = gtk.MessageDialog(None, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtkErrorLevel, gtk.BUTTONS_OK, '' if isPango else text)
+	if isPango: dlg.set_markup(text)
 	dlg.set_title(_("Error"))
 	dlg.run()
 	dlg.destroy()
@@ -449,6 +456,10 @@ class Readlines(object):
 	def __del__(self):
 		pass
 
+def prepend_uniq(array, item):
+	while item in array: array.remove(item)
+	array.insert(0, item)
+
 def convert_to_bytes(s, p='b'):
 	prefix = {'b': 1, 'k': 1024, 'm': 1024**2, 'g': 1024**3, 't': 1024**4, 'p': 1024**5,}
 	m = re.search('(.+?)([a-z]?)$', s, re.IGNORECASE)
@@ -479,32 +490,72 @@ def set_xattrs(fh, attrs, filename='-'):
 			except IOError, e:
 				stderr(_("Notice: can not set xattr '%s' on '%s': %s\n") % (attrname, filename, str(e)))
 
+if not hasattr(glob, 'escape'):
+	def glob_escape(s):
+		for c in '[*?':
+			s = s.replace(c, '['+c+']')
+		return s
+	glob.escape = glob_escape
+
+def next_file_number(preglob, sufglob, n=1):
+	while True:
+		wildcard = preglob + str(n) + sufglob
+		if not glob.glob(wildcard): break
+		n += 1
+	return n
+
+if hasattr(magic, 'open'):
+	mime_magic = magic.open(magic.MAGIC_MIME_TYPE)
+	mime_magic.load()
+
+def guess_mime(path):
+	if hasattr(magic, 'open'):
+		typ = mime_magic.file(path)
+	else:
+		typ = magic.from_file(path, mime=True)
+	if typ is not None and not re.match('[a-z0-9_+-]+/[a-z0-9_+-]+$', typ): typ = None
+	return typ
+
 ### Private methods ###
 
-class Download(object):
+class BaseDownload(object):
 	def __init__(self, url, params={}):
 		self.added_ts = time.time()
-		self.original_url = url
-		self.actual_url = url
-		self.params = params
-		self.progress_type = 'bar:force'
-		#self.progress_type = 'dot:default'
 		self.logfile = next_logfile()
+		self.original_url = url
+		self.params = params
 		self.outfile = None
 		self.Lock = threading.Lock()
-		self._pid = None
-		self.init()
 	def morior(self):
 		delattr(self, 'Lock')
 	def resurgo(self):
 		self.Lock = threading.Lock()
-		if self.running:
-			t2 = threading.Thread(target=self.watch_log, args=())
-			t2.daemon = True
-			t2.start()
 	def configure(self, attrs, items):
 		for k, v in attrs.iteritems():
 			setattr(self, k, v)
+	def __getitem__(self, key):
+		self.Lock.acquire(True)
+		if hasattr(self, '_' + key):
+			out = getattr(self, '_' + key)
+			self.Lock.release()
+			return out
+		else:
+			self.Lock.release()
+			raise KeyError()
+	def __delitem__(self, key):
+		self.Lock.acquire(True)
+		if hasattr(self, '_' + key):
+			delattr(self, '_' + key)
+		self.Lock.release()
+	def __setitem__(self, key, val):
+		self.Lock.acquire(True)
+		setattr(self, '_' + key, val)
+		self.Lock.release()
+		return True
+	def get_dumpfile(self):
+		return self.logfile[:-3] + 'obj'
+	def get_url(self):
+		return self.original_url
 	def init(self):
 		self['status'] = S_QUEUE
 		self.completed = False
@@ -512,19 +563,38 @@ class Download(object):
 		self.size = None
 		self.mime_remote = None
 		self.mime_local = None
+		self.charset = None
 		self.percent = -1
 		self.speed = 0
 		self.speed_str = ''
 		self.eta = -1
 		self.eta_str = ''
 		self.lastline = ''
-	def __getitem__(self, key):
-		self.Lock.acquire(True)
-		if hasattr(self, '_' + key):
-			self.Lock.release()
-			return getattr(self, '_' + key)
-		else:
-			raise KeyError()
+	def mark_completed(self):
+		self.completed = True
+		self['status'] = S_SAVED
+		self.eta = -1
+		self.eta_str = ''
+		if self.mime_local is None: self.set_mime_local()
+		refresh_download_state(self)
+		on_completed_download(self)
+	def set_mime_local(self):
+		self.mime_local = guess_mime(self.outfile)
+
+class Download(BaseDownload):
+	def __init__(self, url, params={}):
+		super(self.__class__, self).__init__(url, params)
+		self.actual_url = None
+		self.progress_type = 'bar:force'
+		#self.progress_type = 'dot:default'
+		self._pid = None
+		self.init()
+	def resurgo(self):
+		super(self.__class__, self).resurgo()
+		if self.running:
+			t2 = threading.Thread(target=self.watch_log, args=())
+			t2.daemon = True
+			t2.start()
 	def __setitem__(self, key, val):
 		self.Lock.acquire(True)
 		if key == 'status' and hasattr(self, '_status'):
@@ -534,15 +604,15 @@ class Download(object):
 				return False
 			if self._status == S_INIT and val == S_DL:
 				# Set xAttributes when downloading just started
-				setxattributes(self)
+				try:
+					setxattributes(self)
+				except IOError, e:
+					print e.message
 		setattr(self, '_' + key, val)
 		self.Lock.release()
 		return True
-	def __delitem__(self, key):
-		self.Lock.acquire(True)
-		if hasattr(self, '_' + key):
-			delattr(self, '_' + key)
-		self.Lock.release()
+	def get_url(self):
+		return self.actual_url or self.original_url
 	def spawn_wget(self, args=[]):
 		reader, writer = os.pipe()
 		pid = os.fork()
@@ -709,12 +779,8 @@ class Download(object):
 				self['status'] = S_DL
 				refresh = True
 			if m_completed:
-				self.completed = True
-				self['status'] = S_SAVED
-				self.eta = -1
-				self.eta_str = ''
+				self.mark_completed()
 				refresh = True
-				on_completed_download(self)
 			if m_redirect:
 				self.actual_url = m_redirect.group(1)
 				refresh = True
@@ -729,7 +795,7 @@ class Download(object):
 		self['status'] = S_ERR
 		self['pid'] = None
 		refresh_download_state(self)
-		on_ended_download(self)
+		start_next_download(self)
 	def stop(self):
 		if self['pid'] is not None:
 			try:
@@ -739,6 +805,116 @@ class Download(object):
 				if e.errno != os.errno.ESRCH:
 					raise e
 
+class DataDownload(BaseDownload):
+	Decoder = {
+		'base64': base64.decodestring,
+		'url': urllib.unquote,
+	}
+	def __init__(self, url, params={}):
+		super(self.__class__, self).__init__(url, params)
+		self.init()
+	def get_url(self):
+		return None
+	def start(self):
+		if self.completed or self.original_url is None:
+			return False
+		t1 = threading.Thread(target=self.worker)
+		t1.daemon = True
+		t1.start()
+	def worker(self):
+		self['status'] = S_INIT
+		self.running = True
+		try:
+			encoding = 'url'
+			try:
+				m = re.match('^data:(?:([^,]*),)?(.*)', self.original_url)
+				meta, data = m.groups()
+				if meta is None: meta = ''
+			except ValueError:
+				raise Exception(_("Can not parse url."))
+			# Free memory:
+			self.original_url = None
+			for m in meta.split(';'):
+				if m.startswith('charset='):
+					self.charset = m[8:]
+				elif re.match('.*/', m):
+					self.mime_remote = m
+				elif m in ['base64']:
+					encoding = m
+			
+			directory = self.params['--directory-prefix']
+			basename = 'data-'
+			num = next_file_number(glob.escape(os.path.join(directory, basename)), '.*')
+			ext = guess_extension(self.mime_remote or MIME_DEFAULT) or '.dat'
+			filename = '%s%d%s' % (basename, num, ext)
+			self.outfile = os.path.join(directory, filename)
+			
+			try:
+				decoder = self.Decoder[encoding]
+			except KeyError:
+				raise Exception(_("Unknown encoding: %s" % (encoding)))
+			try:
+				fh = open(self.outfile, 'w')
+				self['status'] = S_DL
+				fh.write(decoder(data))
+				self.size = fh.tell()
+				fh.close()
+				self.percent = 100
+			except IOError, e:
+				raise Exception(e)
+			
+			self.running = False
+			self.mark_completed()
+		except Exception, e:
+			self['status'] = S_ERR
+			self.running = False
+			refresh_download_state(self)
+			display_error(e)
+	def stop(self):
+		return False
+
+def column_width_change(col, pspec):
+	sid = col.get_data('signal-notify::width')
+	w = col.get_property(pspec.name)
+	col.set_data('reported-width', w)
+	if not scroller.get_data('initial-column-resize'):
+		if all(map(lambda col: col.get_data('reported-width'), main_list.get_columns())):
+			scroller.set_data('initial-column-resize', True)
+			resize_columns()
+			win_main.connect('configure-event', win_main_configure)
+	if win_main.get_data('resized'):
+		win_main.remove_data('resized')
+		resize_columns()
+
+def resize_columns():
+	cols = main_list.get_columns()
+	if all(map(lambda col: col.get_data('reported-width'), cols)):
+		total = scroller.get_allocation().width
+		midwidth = 0
+		for col in cols[1:-1]:
+			midwidth += col.get_data('reported-width')
+		treeview_column_set_width(cols[0], total - midwidth - 24)
+
+def treeview_column_set_width(col, width):
+	col.set_data('column-width', width)
+	col.set_min_width(width)
+	col.set_max_width(width)
+	glib.idle_add(lambda: 
+		(
+			col.set_min_width(-1), 
+			col.set_max_width(-1), 
+		),
+		priority=glib.PRIORITY_DEFAULT_IDLE)
+
+def win_main_configure(win, evt):
+	if win_main.get_data('saved-width') != evt.width or win_main.get_data('saved-height') != evt.height:
+		win_main.set_data('resized', True)
+		win_main.set_data('saved-width', evt.width)
+		win_main.set_data('saved-height', evt.height)
+		# Trigger column-width changes:
+		col0 = main_list.get_columns()[0]
+		w = col0.get_data('column-width')
+		treeview_column_set_width(col0, w+1)
 
 def win_main_show():
 	# Manage GUI
@@ -746,7 +922,12 @@ def win_main_show():
 	
 	# Load cached downloads from object dumps
 	import_downloads()
-
+	
+	# Add signals for each column
+	for col in main_list.get_columns():
+		sid = col.connect('notify::width', column_width_change)
+		col.set_data('signal-notify::width', sid)
+	
 	# Start background thread
 	continous_refresh_thread = threading.Thread(target=continous_refresh, args=())
 	continous_refresh_thread.daemon = True
@@ -816,6 +997,8 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 						params_def()
 				else:
 					params_def()
+		if params.has_key('--directory-prefix'):
+			prepend_uniq(LastFolders, params['--directory-prefix'])
 		urls = '\n'.join(cliURLs) + '\n'
 		if win_newdl.props.visible and append_url:
 			old_urls = p1t1.get_text()
@@ -845,20 +1028,19 @@ def import_downloads():
 def export_downloads():
 	for it, dl in iter_downloadlist():
 		dl.morior()
-		fh = open(get_dumpfile(dl), 'w')
+		fh = open(dl.get_dumpfile(), 'w')
 		pickle.dump(dl, fh)
 		fh.close()
 
-def get_dumpfile(dl):
-	return dl.logfile[:-3] + 'obj'
-
 def next_logfile():
-	n = len(os.listdir(CacheFolder))
-	f = 'gwget-' + str(n) + '.log'
-	while os.path.exists(os.path.join(CacheFolder, f)) or any(f == os.path.basename(dl.logfile or '') for it, dl in iter_downloadlist()):
-		n += 1
-		f = 'gwget-' + str(n) + '.log'
-	return os.path.join(CacheFolder, f)
+	num = 1
+	while True:
+		num = next_file_number(glob.escape(os.path.join(CacheFolder, 'gwget-')), '.log', num)
+		fpath = os.path.join(CacheFolder, 'gwget-%d.log' % (num))
+		if all(fpath != dl.logfile for it, dl in iter_downloadlist()):
+			break
+		num += 1
+	return fpath
 
 class iter_downloadlist(object):
 	def __init__(self):
@@ -882,21 +1064,18 @@ def refresh_download_state(dlobj, doAll=False):
 		row = DownLoadList[it]
 		if doAll or dl == dlobj:
 			if dl.outfile is None:
-				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.actual_url).path))
+				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
 			else:
 				row[COL_NAME] = os.path.basename(dl.outfile)
-			tvc1.queue_resize()
 			
-			if not(hasattr(dl, 'mime_local') and dl.mime_local is not None):
+			mime = dl.mime_local
+			if not mime:
 				if dl.completed:
-					mime, x = mimetypes.guess_type(dl.outfile)
-					dl.mime_local = mime
-				else:
+					dl.set_mime_local()
+					mime = dl.mime_local
+				if not dl.completed or mime is None:
 					mime = dl.mime_remote
-			else:
-				mime = dl.mime_local
-			mime = mime or 'application/octet-stream'
-			icon = gio.content_type_get_icon(mime)
+			icon = gio.content_type_get_icon(mime or MIME_DEFAULT)
 			theme = gtk.icon_theme_get_default()
 			info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
 			if info is not None:
@@ -912,7 +1091,7 @@ def refresh_download_state(dlobj, doAll=False):
 				row[COL_PRCSTR] = str(dl.percent) + '%'
 			else:
 				row[COL_PERCENT] = 0
-				if dl.running:
+				if dl.running and not dl.completed:
 					if row[COL_PULSE] < 0:
 						row[COL_PULSE] = 0
 					try:
@@ -947,32 +1126,40 @@ def refresh_download_state(dlobj, doAll=False):
 
 def pulse_download(pid):
 	for it, dl in iter_downloadlist():
-		if dl['pid'] == pid:
-			DownLoadList[it][COL_PULSE] += 1
+		try:
+			if dl['pid'] == pid:
+				DownLoadList[it][COL_PULSE] += 1
+				break
+		except KeyError:
+			pass
 
 def continous_refresh():
 	while True:
 		refresh_download_state(None, doAll=True)
 		time.sleep(60)
 
-def on_ended_download(dl):
-	this_host = urlparse.urlparse(dl.actual_url).hostname
+def start_next_download(prev_dl):
+	assert(prev_dl.get_url())
+	this_host = urlparse.urlparse(prev_dl.get_url()).hostname
 	start_dl = None
-	for it, dl in sorted(iter_downloadlist(), key=lambda (it, dl): dl.added_ts):
-		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.actual_url).hostname:
-			# it is a DL on the same host as the finished one
+	for it, dl in sorted(iter_downloadlist(), key = lambda(it, dl): dl.added_ts):
+		if not dl.get_url(): continue
+		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.get_url()).hostname:
+			# this is a DL on the same host as the finished one was on
 			if dl['status'] in [S_INIT, S_DL]:
 				# if there is at least one DL initializing or downloading, then stop lookup
 				start_dl = None
 				break
 			if start_dl is None and dl['status'] in [S_QUEUE]:
-				# it is a queued DL, start it unless an other DL matched above
+				# this is a queued DL, start it unless an other DL matched above
 				start_dl = dl
 	if start_dl is not None:
 		start_dl.start()
 
 def setxattributes(dl):
-	attrs = {XATTR_URI: dl.actual_url}
+	attrs = {XATTR_URI: dl.original_url}
+	if dl.mime_remote not in [None, MIME_DEFAULT]:
+		attrs[XATTR_MIME] = dl.mime_remote
 	if dl.params.has_key('--referer'):
 		attrs[XATTR_REFERER] = dl.params['--referer']
 	set_xattrs_file(dl.outfile, attrs)
@@ -980,26 +1167,47 @@ def setxattributes(dl):
 def on_completed_download(dl):
 	if os.path.exists(dl.outfile):
 		setxattributes(dl)
+		rename_to_filepath = None
+		warnfail = False
 		if dl.params.has_key('rename_to'):
 			if dl.params['rename_to'].startswith(os.path.sep):
 				rename_to_filepath = dl.params['rename_to']
 			else:
 				rename_to_filepath = os.path.join(dl.params['--directory-prefix'], dl.params['rename_to'])
 			mkdir(os.path.dirname(rename_to_filepath))
-			try:
-				os.rename(dl.outfile, rename_to_filepath)
-			except OSError, e:
-				e.filename = None
-				e.filenames = [dl.outfile, rename_to_filepath]
-				display_error(e)
-			else:
-				dl.outfile = dl.params['rename_to']
+			warnfail = True
+		elif isinstance(dl, DataDownload):
+			if dl.mime_local:
+				path, extold = os.path.splitext(dl.outfile)
+				extnew = guess_extension(dl.mime_local)
+				if extnew and extnew != extold:
+					rename_to_filepath = path + extnew
+		elif re.match('.*\?[^?]+=', dl.outfile):
+			rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
+		if rename_to_filepath is not None:
+			rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
 		SQ = '\''
 		esc_filename = SQ + dl.outfile.replace(SQ, SQ+'\\'+SQ+SQ) + SQ
 		shcmd = s.replace('{}', esc_filename)
 		run_detached('sh', ['-c', shcmd])
+
+def rename_downloaded_file(dl, newname, warnfail=True):
+	if os.path.exists(newname):
+		display_error(_("Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>") % (glib.markup_escape_text(dl.outfile), glib.markup_escape_text(newname)), isPango=True, gtkErrorLevel=gtk.MESSAGE_WARNING)
+	else:
+		try:
+			os.rename(dl.outfile, newname)
+		except OSError, e:
+			if e.errno == os.errno.EXDEV:
+				pass # TODO copy+unlink
+			else:
+				e.filename = None
+				e.filenames = [dl.outfile, newname]
+				display_error(e)
+		else:
+			dl.outfile = newname
 
 def DownLoadList_append_new(d):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
@@ -1017,7 +1225,12 @@ def DownLoadList_append_new(d):
 	return DownLoadList.append(row)
 
 def start_new_download(url, params, start=True):
-	dl = Download(url, params)
+	urlparts = urlparse.urlparse(url)
+	if urlparts.scheme == 'data':
+		dl = DataDownload(url, params)
+		start = True
+	else:
+		dl = Download(url, params)
 	it = DownLoadList_append_new({COL_DLOBJ: dl})
 	refresh_download_state(dl)
 	if start:
@@ -1096,24 +1309,23 @@ def act_pause(it, dl):
 
 def act_remove_download(it, dl, force=False):
 	if not dl.running and dl.outfile is not None:
-		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
+		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
 def act_clear_download(it, dl):
 	if not dl.running:
 		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
 			try:
-				if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url), glib.markup_escape_text(dl.outfile or '')), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
+				if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
 					act_remove_download(it, dl, force=True)
 			except DialogCancel:
 				return
 		if dl.logfile is not None:
 			untrack_download_file(dl)
 		del DownLoadList[it]
-		tvc1.queue_resize()
 
 def untrack_download_file(dl):
-	delete(get_dumpfile(dl))
+	delete(dl.get_dumpfile())
 	delete(dl.logfile)
 
 def act_show_log(it, dl):
@@ -1141,7 +1353,7 @@ def act_props(it, dl):
 	#print dl.__dict__
 	show_win_newdl()
 	reset_parameters(dl.params)
-	p1t1.set_text(dl.original_url)
+	p1t1.set_text(dl.original_url or '')
 
 
 
@@ -1231,10 +1443,9 @@ def on_treeview_key(tree, event):
 
 
 ## New Download window
-def new_download(start=True, open=False):
+def new_download(start=True, doOpen=False):
 	selected_folder = p1c1.get_text()
-	if selected_folder in LastFolders: LastFolders.remove(selected_folder)
-	LastFolders.insert(0, selected_folder)
+	prepend_uniq(LastFolders, selected_folder)
 	
 	params = {}
 	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
@@ -1246,7 +1457,7 @@ def new_download(start=True, open=False):
 				params[flag] += data
 			else:
 				params[flag] = data
-	if open:
+	if doOpen:
 		params['on_complete'] = 'mimeopen-gui {}'
 	params['runnable'] = start
 	
@@ -1255,12 +1466,15 @@ def new_download(start=True, open=False):
 	uniq_host = {}
 	for url in p1t1.get_text().split():
 		if not uniq_url.has_key(url):
-			this_host = urlparse.urlparse(url).hostname
-			start_this = False if not start else not any(this_host == host for host in uniq_host.iterkeys())
+			this_hostname = urlparse.urlparse(url).hostname
+			if start:
+				start_this = all(this_hostname != host for host in uniq_host.iterkeys())
+			else:
+				start_this = False
 			it = start_new_download(url, params, start=start_this)
 			main_selection.select_iter(it)
 			uniq_url[url] = 1
-			uniq_host[this_host] = 1
+			uniq_host[this_hostname] = 1
 	win_newdl.hide()
 
 def DnD_motion(wdg, context, x, y, time):
@@ -1323,6 +1537,10 @@ LastFolder = os.getcwd()
 LastFolders = [LastFolder]
 XATTR_URI = 'user.xdg.origin.url'
 XATTR_REFERER = 'user.xdg.referrer.url'
+XATTR_MIME = 'user.mime_type'
+XATTR_CHARSET = 'user.charset'
+MDASH_UTF8 = '—'
+MIME_DEFAULT = 'application/octet-stream'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
 COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(16)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP = range(6)
@@ -1350,16 +1568,16 @@ CliOptNotReqParam = ['--cwd-prefix']
 if '--help' in sys.argv or '-h' in sys.argv:
 	print """Usage: gwget [gwget options] [wget options] [URLs...]
 gwget options:
-  --proxy-url
-  --cookies
+  --proxy-url URL
+  --cookies NAME=VALUE[;NAME=VALUE[;...]]
   --cwd-prefix
-  --rename-to
-  --run-on-complete"""
+  --rename-to FILENAME
+  --run-on-complete COMMAND"""
 	raise SystemExit(0)
 
 # Check if application is already running
 if dbus.SessionBus().request_name(APPNAME) != dbus.bus.REQUEST_NAME_REPLY_PRIMARY_OWNER:
-	stderr(_("Already running.")+'\n')
+	stderr(PROGNAME+': '+_("Already running.")+'\n')
 	method = dbus.SessionBus().get_object(APPNAME, '/'+APPNAME.replace('.', '/')).get_dbus_method('new_download')
 	method(sys.argv, os.getcwd())
 	raise SystemExit(0)
@@ -1426,18 +1644,18 @@ x, x, x, x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, 
 on_selection_change(main_selection)
 
 
-tvc1 = gtk.TreeViewColumn(_("Filename"))
-tvc1.set_resizable(True)
-tvc1.set_sort_column_id(COL_NAME)
-tvc1.set_sort_indicator(True)
+tvc0 = gtk.TreeViewColumn(_("Filename"))
+tvc0.set_resizable(True)
+tvc0.set_sort_column_id(COL_NAME)
+tvc0.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
-tvc1.pack_start(cr_pix, False)
-tvc1.pack_start(cr_txt, True)
-tvc1.add_attribute(cr_txt, 'text', COL_NAME)
-tvc1.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
-tvc1.add_attribute(cr_pix, 'pixbuf', COL_PXB)
-main_list.append_column(tvc1)
+tvc0.pack_start(cr_pix, False)
+tvc0.pack_start(cr_txt, True)
+tvc0.add_attribute(cr_txt, 'text', COL_NAME)
+tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
+tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
+main_list.append_column(tvc0)
 tvc = gtk.TreeViewColumn(_("Progress"))
 tvc.set_resizable(True)
 tvc.set_sort_column_id(COL_PERCENT)
