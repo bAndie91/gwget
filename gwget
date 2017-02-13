@@ -916,6 +916,11 @@ def win_main_configure(win, evt):
 		w = col0.get_data('column-width')
 		treeview_column_set_width(col0, w+1)
 
+def treeview_column_edited(cellrenderer, itpath, newtext):
+	dl = DownLoadList[itpath][COL_DLOBJ]
+	if dl.outfile:
+		rename_downloaded_file(dl, os.path.join(os.path.dirname(dl.outfile), newtext))
+
 def win_main_show():
 	# Manage GUI
 	btn_remove.hide()
@@ -1194,6 +1199,8 @@ def on_completed_download(dl):
 		run_detached('sh', ['-c', shcmd])
 
 def rename_downloaded_file(dl, newname, warnfail=True):
+	if dl.outfile == newname:
+		return
 	if os.path.exists(newname):
 		display_error(_("Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>") % (glib.markup_escape_text(dl.outfile), glib.markup_escape_text(newname)), isPango=True, gtkErrorLevel=gtk.MESSAGE_WARNING)
 	else:
@@ -1208,6 +1215,7 @@ def rename_downloaded_file(dl, newname, warnfail=True):
 				display_error(e)
 		else:
 			dl.outfile = newname
+			refresh_download_state(dl)
 
 def DownLoadList_append_new(d):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
@@ -1650,6 +1658,8 @@ tvc0.set_sort_column_id(COL_NAME)
 tvc0.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
+cr_txt.connect('edited', treeview_column_edited)
+cr_txt.set_property('editable', True)
 tvc0.pack_start(cr_pix, False)
 tvc0.pack_start(cr_txt, True)
 tvc0.add_attribute(cr_txt, 'text', COL_NAME)
