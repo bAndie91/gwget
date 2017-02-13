@@ -818,7 +818,12 @@ class DataDownload(BaseDownload):
 	def start(self):
 		if self.completed or self.original_url is None:
 			return False
+		t1 = threading.Thread(target=self.worker)
+		t1.daemon = True
+		t1.start()
+	def worker(self):
 		self['status'] = S_INIT
+		self.running = True
 		try:
 			encoding = 'url'
 			try:
@@ -858,9 +863,11 @@ class DataDownload(BaseDownload):
 			except IOError, e:
 				raise Exception(e)
 			
+			self.running = False
 			self.mark_completed()
 		except Exception, e:
 			self['status'] = S_ERR
+			self.running = False
 			refresh_download_state(self)
 			display_error(e)
 	def stop(self):
@@ -868,14 +875,16 @@ class DataDownload(BaseDownload):
 
 def column_width_change(col, pspec):
 	sid = col.get_data('signal-notify::width')
-	col.disconnect(sid)
-	
 	w = col.get_property(pspec.name)
 	col.set_data('reported-width', w)
-	resize_columns()
-
-def scroller_allocate(scr, rect):
-	resize_columns()
+	if not scroller.get_data('initial-column-resize'):
+		if all(map(lambda col: col.get_data('reported-width'), main_list.get_columns())):
+			scroller.set_data('initial-column-resize', True)
+			resize_columns()
+			win_main.connect('configure-event', win_main_configure)
+	if win_main.get_data('resized'):
+		win_main.remove_data('resized')
+		resize_columns()
 
 def resize_columns():
 	cols = main_list.get_columns()
@@ -884,9 +893,28 @@ def resize_columns():
 		midwidth = 0
 		for col in cols[1:-1]:
 			midwidth += col.get_data('reported-width')
-		col1width = total - midwidth - 24
-		cols[0].set_max_width(col1width)
-		glib.idle_add(lambda: main_list.get_columns()[0].set_max_width(-1), priority=glib.PRIORITY_DEFAULT_IDLE)
+		treeview_column_set_width(cols[0], total - midwidth - 24)
+
+def treeview_column_set_width(col, width):
+	col.set_data('column-width', width)
+	col.set_min_width(width)
+	col.set_max_width(width)
+	glib.idle_add(lambda: 
+		(
+			col.set_min_width(-1), 
+			col.set_max_width(-1), 
+		),
+		priority=glib.PRIORITY_DEFAULT_IDLE)
+
+def win_main_configure(win, evt):
+	if win_main.get_data('saved-width') != evt.width or win_main.get_data('saved-height') != evt.height:
+		win_main.set_data('resized', True)
+		win_main.set_data('saved-width', evt.width)
+		win_main.set_data('saved-height', evt.height)
+		# Trigger column-width changes:
+		col0 = main_list.get_columns()[0]
+		w = col0.get_data('column-width')
+		treeview_column_set_width(col0, w+1)
 
 def win_main_show():
 	# Manage GUI
@@ -1616,18 +1644,18 @@ x, x, x, x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, 
 on_selection_change(main_selection)
 
 
-tvc1 = gtk.TreeViewColumn(_("Filename"))
-tvc1.set_resizable(True)
-tvc1.set_sort_column_id(COL_NAME)
-tvc1.set_sort_indicator(True)
+tvc0 = gtk.TreeViewColumn(_("Filename"))
+tvc0.set_resizable(True)
+tvc0.set_sort_column_id(COL_NAME)
+tvc0.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
-tvc1.pack_start(cr_pix, False)
-tvc1.pack_start(cr_txt, True)
-tvc1.add_attribute(cr_txt, 'text', COL_NAME)
-tvc1.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
-tvc1.add_attribute(cr_pix, 'pixbuf', COL_PXB)
-main_list.append_column(tvc1)
+tvc0.pack_start(cr_pix, False)
+tvc0.pack_start(cr_txt, True)
+tvc0.add_attribute(cr_txt, 'text', COL_NAME)
+tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
+tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
+main_list.append_column(tvc0)
 tvc = gtk.TreeViewColumn(_("Progress"))
 tvc.set_resizable(True)
 tvc.set_sort_column_id(COL_PERCENT)
@@ -1682,7 +1710,6 @@ tvc.pack_start(cr_txt, True)
 tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
 main_list.append_column(tvc)
 
-scroller.connect('size-allocate', scroller_allocate)
 DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
 main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
