@@ -385,18 +385,24 @@ def load_toolitems(toolbar, toolitems):
 	return items
 
 def str_accurate_at_time(ts):
+	HOUR = 60 * 60
+	DAY = 24 * HOUR
+	WEEK = 7 * DAY
+	YEAR = 365 * DAY
+	
+	ts0 = time.time()
+	age = ts0 - ts
 	then = time.localtime(ts)
-	now = time.localtime(time.time())
-	if now.tm_year == then.tm_year:
-		if now.tm_mon == then.tm_mon:
-			if now.tm_mday == then.tm_mday:
+	if age < YEAR:
+		if age < 4 * WEEK:
+			if age < DAY:
 				fmt = '%H:%M'
 			else:
-				fmt = '%b. %d'
+				fmt = '%d, %a'
 		else:
-			fmt = '%b. %d'
+			fmt = '%b %d'
 	else:
-		fmt = '%Y %b.'
+		fmt = '%Y %b'
 	return time.strftime(fmt, then)
 
 ## OS functions
@@ -880,13 +886,16 @@ def column_width_change(col, pspec):
 	if not scroller.get_data('initial-column-resize'):
 		if all(map(lambda col: col.get_data('reported-width'), main_list.get_columns())):
 			scroller.set_data('initial-column-resize', True)
-			resize_columns()
+			for col in main_list.get_columns():
+				col.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
+				col.set_fixed_width(col.get_data('reported-width'))
+			resize_column0()
 			win_main.connect('configure-event', win_main_configure)
 	if win_main.get_data('resized'):
 		win_main.remove_data('resized')
-		resize_columns()
+		resize_column0()
 
-def resize_columns():
+def resize_column0():
 	cols = main_list.get_columns()
 	if all(map(lambda col: col.get_data('reported-width'), cols)):
 		total = scroller.get_allocation().width
@@ -897,29 +906,52 @@ def resize_columns():
 
 def treeview_column_set_width(col, width):
 	col.set_data('column-width', width)
-	col.set_min_width(width)
-	col.set_max_width(width)
-	glib.idle_add(lambda: 
-		(
-			col.set_min_width(-1), 
-			col.set_max_width(-1), 
-		),
-		priority=glib.PRIORITY_DEFAULT_IDLE)
+	if col.get_sizing() == gtk.TREE_VIEW_COLUMN_FIXED:
+		col.set_fixed_width(width)
+	else:
+		col.set_min_width(width)
+		col.set_max_width(width)
+		glib.idle_add(lambda: (col.set_min_width(-1), col.set_max_width(-1)), priority=glib.PRIORITY_DEFAULT_IDLE)
 
 def win_main_configure(win, evt):
 	if win_main.get_data('saved-width') != evt.width or win_main.get_data('saved-height') != evt.height:
 		win_main.set_data('resized', True)
 		win_main.set_data('saved-width', evt.width)
 		win_main.set_data('saved-height', evt.height)
-		# Trigger column-width changes:
+		# Trigger column-width change:
 		col0 = main_list.get_columns()[0]
 		w = col0.get_data('column-width')
 		treeview_column_set_width(col0, w+1)
 
-def treeview_column_edited(cellrenderer, itpath, newtext):
+def lock_row_refresh(doLock, rowiter=None):
+	if doLock:
+		globals()['RenameLock'] = True
+		if rowiter is None:
+			# TODO !!
+			# - not dl.completed/running/refreshing(?)
+			# - editing which iterator?
+			rowiter = DownLoadList.get_iter(main_selection.get_selected_rows()[1][0])
+		DownLoadList[rowiter][COL_PRCSTR] = '???'
+		DownLoadList[rowiter][COL_SPEED_STR] = '???'
+		DownLoadList[rowiter][COL_STATUS_ICON] = StatusIcon[S_GUILOCK]
+		DownLoadList[rowiter][COL_STATUS] = _(Status[S_GUILOCK])
+		DownLoadList[rowiter][COL_ETA_STR] = '???'
+	else:
+		globals()['RenameLock'] = False
+		refresh_download_state_all()
+
+def treeview_column0_editing(cellrenderer, editable, itpath):
+	lock_row_refresh(True)
+
+def treeview_column0_edited(cellrenderer, itpath, newtext):
 	dl = DownLoadList[itpath][COL_DLOBJ]
 	if dl.outfile:
-		rename_downloaded_file(dl, os.path.join(os.path.dirname(dl.outfile), newtext))
+		if rename_downloaded_file(dl, os.path.join(os.path.dirname(dl.outfile), newtext)):
+			dl.manually_renamed = True
+	lock_row_refresh(False)
+
+def treeview_column0_edit_canceled(cellrenderer):
+	lock_row_refresh(False)
 
 def win_main_show():
 	# Manage GUI
@@ -1028,7 +1060,7 @@ def import_downloads():
 			fh.close()
 			obj.resurgo()
 			DownLoadList_append_new({COL_DLOBJ: obj})
-	refresh_download_state(None, doAll=True)
+	refresh_download_state_all()
 
 def export_downloads():
 	for it, dl in iter_downloadlist():
@@ -1062,64 +1094,69 @@ class iter_downloadlist(object):
 	def __del__(self):
 		pass
 
-def refresh_download_state(dlobj, doAll=False):
+def refresh_download_state_all():
+	return refresh_download_state(None)
+
+def refresh_download_state(dlobj):
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
+	doAll = dlobj is None
 	for it, dl in iter_downloadlist():
 		row = DownLoadList[it]
-		if doAll or dl == dlobj:
-			if dl.outfile is None:
-				row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
-			else:
-				row[COL_NAME] = os.path.basename(dl.outfile)
-			
-			mime = dl.mime_local
-			if not mime:
-				if dl.completed:
-					dl.set_mime_local()
-					mime = dl.mime_local
-				if not dl.completed or mime is None:
-					mime = dl.mime_remote
-			icon = gio.content_type_get_icon(mime or MIME_DEFAULT)
-			theme = gtk.icon_theme_get_default()
-			info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
-			if info is not None:
-				row[COL_FILE_ICON] = None
-				row[COL_PXB] = info.load_icon()
-			else:
-				row[COL_PXB] = None
-				row[COL_FILE_ICON] = gtk.STOCK_FILE
-			
-			if dl.percent >= 0:
-				row[COL_PULSE] = -1
-				row[COL_PERCENT] = dl.percent
-				row[COL_PRCSTR] = str(dl.percent) + '%'
-			else:
-				row[COL_PERCENT] = 0
-				if dl.running and not dl.completed:
-					if row[COL_PULSE] < 0:
-						row[COL_PULSE] = 0
-					try:
-						row[COL_PULSE] += 1
-					except TypeError:
-						row[COL_PULSE] = 1
+		if doAll or dlobj == dl:
+			if not globals()['RenameLock']:
+				if dl.outfile is None:
+					row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
 				else:
+					row[COL_NAME] = os.path.basename(dl.outfile)
+					if os.path.exists(dl.outfile):
+						row[COL_FEXISTS] = 1
+				
+				mime = dl.mime_local
+				if not mime:
 					if dl.completed:
-						row[COL_PERCENT] = 100
-						row[COL_PULSE] = gobject.constants.G_MAXINT
+						dl.set_mime_local()
+						mime = dl.mime_local
+					if not dl.completed or mime is None:
+						mime = dl.mime_remote
+				icon = gio.content_type_get_icon(mime or MIME_DEFAULT)
+				theme = gtk.icon_theme_get_default()
+				info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
+				if info is not None:
+					row[COL_FILE_ICON] = None
+					row[COL_PXB] = info.load_icon()
+				else:
+					row[COL_PXB] = None
+					row[COL_FILE_ICON] = gtk.STOCK_FILE
+				
+				if dl.percent >= 0:
+					row[COL_PULSE] = -1
+					row[COL_PERCENT] = dl.percent
+					row[COL_PRCSTR] = str(dl.percent) + '%'
+				else:
+					row[COL_PERCENT] = 0
+					if dl.running and not dl.completed:
+						if row[COL_PULSE] < 0:
+							row[COL_PULSE] = 0
+						try: row[COL_PULSE] += 1
+						except TypeError: row[COL_PULSE] = 1
 					else:
-						row[COL_PULSE] = 0
-				row[COL_PRCSTR] = ''
-			row[COL_STATUS_ICON] = StatusIcon[dl['status']]
-			row[COL_STATUS] = _(Status[dl['status']])
-			row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
-			
-			row[COL_SPEED_BPS] = dl.speed
-			row[COL_SPEED_STR] = dl.speed_str
-			row[COL_ETA_SEC] = dl.eta
-			row[COL_ETA_STR] = dl.eta_str
-			row[COL_ADDED_TSTMP] = dl.added_ts
-			row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
+						if dl.completed:
+							row[COL_PERCENT] = 100
+							row[COL_PULSE] = gobject.constants.G_MAXINT
+						else:
+							row[COL_PULSE] = 0
+					row[COL_PRCSTR] = ''
+				row[COL_STATUS_ICON] = StatusIcon[dl['status']]
+				row[COL_STATUS] = _(Status[dl['status']])
+				row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
+				
+				row[COL_SPEED_BPS] = dl.speed
+				row[COL_SPEED_STR] = dl.speed_str
+				row[COL_ETA_SEC] = dl.eta
+				row[COL_ETA_STR] = dl.eta_str
+				row[COL_ADDED_TSTMP] = dl.added_ts
+				row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
 			
 			# if the current download is selected, then refresh toolbuttons sensitivity
 			if main_selection.iter_is_selected(it):
@@ -1140,7 +1177,7 @@ def pulse_download(pid):
 
 def continous_refresh():
 	while True:
-		refresh_download_state(None, doAll=True)
+		refresh_download_state_all()
 		time.sleep(60)
 
 def start_next_download(prev_dl):
@@ -1172,25 +1209,26 @@ def setxattributes(dl):
 def on_completed_download(dl):
 	if os.path.exists(dl.outfile):
 		setxattributes(dl)
-		rename_to_filepath = None
-		warnfail = False
-		if dl.params.has_key('rename_to'):
-			if dl.params['rename_to'].startswith(os.path.sep):
-				rename_to_filepath = dl.params['rename_to']
-			else:
-				rename_to_filepath = os.path.join(dl.params['--directory-prefix'], dl.params['rename_to'])
-			mkdir(os.path.dirname(rename_to_filepath))
-			warnfail = True
-		elif isinstance(dl, DataDownload):
-			if dl.mime_local:
-				path, extold = os.path.splitext(dl.outfile)
-				extnew = guess_extension(dl.mime_local)
-				if extnew and extnew != extold:
-					rename_to_filepath = path + extnew
-		elif re.match('.*\?[^?]+=', dl.outfile):
-			rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
-		if rename_to_filepath is not None:
-			rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
+		if not hasattr(dl, 'manually_renamed') or not dl.manually_renamed:
+			rename_to_filepath = None
+			warnfail = False
+			if dl.params.has_key('rename_to'):
+				if dl.params['rename_to'].startswith(os.path.sep):
+					rename_to_filepath = dl.params['rename_to']
+				else:
+					rename_to_filepath = os.path.join(dl.params['--directory-prefix'], dl.params['rename_to'])
+				mkdir(os.path.dirname(rename_to_filepath))
+				warnfail = True
+			elif isinstance(dl, DataDownload):
+				if dl.mime_local:
+					path, extold = os.path.splitext(dl.outfile)
+					extnew = guess_extension(dl.mime_local)
+					if extnew and extnew != extold:
+						rename_to_filepath = path + extnew
+			elif re.match('.*\?[^?]+=', dl.outfile):
+				rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
+			if rename_to_filepath is not None:
+				rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
 		SQ = '\''
@@ -1200,7 +1238,7 @@ def on_completed_download(dl):
 
 def rename_downloaded_file(dl, newname, warnfail=True):
 	if dl.outfile == newname:
-		return
+		return None
 	if os.path.exists(newname):
 		display_error(_("Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>") % (glib.markup_escape_text(dl.outfile), glib.markup_escape_text(newname)), isPango=True, gtkErrorLevel=gtk.MESSAGE_WARNING)
 	else:
@@ -1216,18 +1254,20 @@ def rename_downloaded_file(dl, newname, warnfail=True):
 		else:
 			dl.outfile = newname
 			refresh_download_state(dl)
+			return True
+	return False
 
 def DownLoadList_append_new(d):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
 	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
-	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE
+	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_FEXISTS
 	# DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, int, str, 
 	#   str, float, int, float, str, 
-	#   int, str, str, str, str)
+	#   int, str, str, str, str, bool)
 	# it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), 
 	#   '', 0, 0, -1, '', 
-	#   -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), ''])
-	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '',  -1, '', '', '', '']
+	#   -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), '', False])
+	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '',  -1, '', '', '', '', False]
 	for idx, val in d.iteritems():
 		row[idx] = val
 	return DownLoadList.append(row)
@@ -1550,8 +1590,9 @@ XATTR_CHARSET = 'user.charset'
 MDASH_UTF8 = '—'
 MIME_DEFAULT = 'application/octet-stream'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
-COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE = range(16)
-S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP = range(6)
+COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_FEXISTS = range(17)
+DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str, bool)
+S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP, S_GUILOCK = range(7)
 Status = {
 	S_QUEUE: "Queued",
 	S_INIT: "Init",
@@ -1559,6 +1600,7 @@ Status = {
 	S_SAVED: "Saved",
 	S_ERR: "Failed",
 	S_STOP: "Paused",
+	S_GUILOCK: "Editing",
 }
 StatusIcon = {
 	S_QUEUE: gtk.STOCK_MEDIA_STOP,
@@ -1567,9 +1609,11 @@ StatusIcon = {
 	S_SAVED: gtk.STOCK_APPLY,
 	S_ERR: gtk.STOCK_NO,
 	S_STOP: gtk.STOCK_MEDIA_PAUSE,
+	S_GUILOCK: gtk.STOCK_EDIT,
 }
 # gwget cli options not requiring parameter
 CliOptNotReqParam = ['--cwd-prefix']
+RenameLock = False
 
 
 
@@ -1603,7 +1647,6 @@ win_main = gtk.Window()
 box_main = gtk.VBox()
 main_toolbar = gtk.Toolbar()
 scroller = gtk.ScrolledWindow()
-DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str)
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
@@ -1658,11 +1701,13 @@ tvc0.set_sort_column_id(COL_NAME)
 tvc0.set_sort_indicator(True)
 cr_pix = gtk.CellRendererPixbuf()
 cr_txt = gtk.CellRendererText()
-cr_txt.connect('edited', treeview_column_edited)
-cr_txt.set_property('editable', True)
+cr_txt.connect('editing-started', treeview_column0_editing)
+cr_txt.connect('editing-canceled', treeview_column0_edit_canceled)
+cr_txt.connect('edited', treeview_column0_edited)
 tvc0.pack_start(cr_pix, False)
 tvc0.pack_start(cr_txt, True)
 tvc0.add_attribute(cr_txt, 'text', COL_NAME)
+tvc0.add_attribute(cr_txt, 'editable', COL_FEXISTS)
 tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
 tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
 main_list.append_column(tvc0)
@@ -1723,6 +1768,9 @@ main_list.append_column(tvc)
 DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
 main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
+main_list.set_enable_search(True)
+main_list.set_search_column(COL_NAME)
+main_list.set_search_position_func() #TODO
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
 main_list.drag_dest_set(0, [], 0)
