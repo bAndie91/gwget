@@ -32,6 +32,7 @@ import setproctitle
 import glob
 import base64
 import traceback
+import resource
 
 
 PROGNAME = 'gwget'
@@ -52,12 +53,17 @@ def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 		text = '%s (%d)\n%s' % (e.strerror, e.errno, e.filename or '; '.join(e.filenames or []))
 	elif isinstance(e, Exception):
 		text = e.message
+		if hasattr(e, 'errno'):
+			text += ' (%d)' % e.errno
 	elif type(e) == type([]):
 		text = ''.join(e)
 	if text is None:
 		text = str(e)
 	if isinstance(e, BaseException):
-		text = e.__class__.__module__ + '.' + e.__class__.__name__ + ':\n' + text
+		classname = e.__class__.__name__
+		if not e.__class__.__module__.startswith('_'):
+			classname = e.__class__.__module__ + '.' + classname
+		text = classname + ':\n' + text
 	dlg = gtk.MessageDialog(None, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtkErrorLevel, gtk.BUTTONS_OK, '' if isPango else text)
 	if isPango: dlg.set_markup(text)
 	dlg.set_title(_("Error"))
@@ -414,7 +420,7 @@ def mkdir(d):
 		mkdir(p)
 	try:
 		os.mkdir(d)
-	except OSError, e:
+	except OSError as e:
 		if e.errno != os.errno.EEXIST:
 			raise e
 
@@ -424,7 +430,7 @@ def stderr(s):
 def delete(f, warn=True):
 	try:
 		os.unlink(f)
-	except OSError, e:
+	except OSError as e:
 		if warn:
 			stderr('%s: error %d: %s\n' % (e.filename, e.errno, e.strerror))
 		if e.errno != os.errno.ENOENT:
@@ -432,12 +438,62 @@ def delete(f, warn=True):
 			return False
 	return True
 
+class PropertyStore(object):
+	pass
+
+class ShellCommandException(Exception):
+	pass
+
+def run_synchronous(cmd, args):
+	args = args[:]
+	args.insert(0, os.path.basename(cmd))
+	outreader, outwriter = os.pipe()
+	errreader, errwriter = os.pipe()
+	pid = os.fork()
+	if pid == 0:
+		os.close(outreader)
+		os.close(errreader)
+		os.dup2(outwriter, sys.stdout.fileno())
+		os.dup2(errwriter, sys.stderr.fileno())
+		sys.stdin.close()
+		os.closerange(3, OSMaxFiles)
+		try: os.execvp(cmd, args)
+		except OSError as e: print e.message
+		os._exit(127)
+	
+	os.close(outwriter)
+	os.close(errwriter)
+	outreader = os.fdopen(outreader, 'r')
+	errreader = os.fdopen(errreader, 'r')
+	cmd = PropertyStore()
+	cmd.stdout = ''
+	cmd.stderr = ''
+	fds = [outreader, errreader]
+	while len(fds) > 0:
+		ready = select.select(fds, [], [], 2.0)
+		for fd in ready[0]:
+			line = fd.readline()
+			if line == '':
+				fd.close()
+				fds.remove(fd)
+			else:
+				if fd == outreader:
+					cmd.stdout += line
+				elif fd == errreader:
+					cmd.stderr += line
+	x, cmd.status = os.waitpid(pid, 0)
+	cmd.exitcode = cmd.status >> 8
+	cmd.signal = cmd.status & 0x7F
+	cmd.coredump = cmd.status & 0x80 >> 7
+	#print cmd.__dict__
+	return cmd
+
 def run_detached(cmd, args):
 	args = args[:]
 	args.insert(0, os.path.basename(cmd))
 	pid1 = os.fork()
 	if pid1 == 0:
-		os.closerange(0, 255)
+		os.closerange(0, OSMaxFiles)
 		pid2 = os.fork()
 		if pid2 == 0:
 			try:
@@ -489,12 +545,12 @@ def set_xattrs(fh, attrs, filename='-'):
 				if attrval is None:
 					try:
 						xattr.removexattr(fh, attrname)
-					except IOError, e:
+					except IOError as e:
 						if e.errno != os.errno.ENODATA:
 							raise e
 				else:
 					xattr.setxattr(fh, attrname, attrval)
-			except IOError, e:
+			except IOError as e:
 				stderr(_("Notice: can not set xattr '%s' on '%s': %s\n") % (attrname, filename, str(e)))
 
 if not hasattr(glob, 'escape'):
@@ -613,7 +669,7 @@ class Download(BaseDownload):
 				# Set xAttributes when downloading just started
 				try:
 					setxattributes(self)
-				except IOError, e:
+				except IOError as e:
 					print e.message
 		setattr(self, '_' + key, val)
 		self.Lock.release()
@@ -634,8 +690,9 @@ class Download(BaseDownload):
 			os.dup2(writer, sys.stdout.fileno())
 			os.dup2(writer, sys.stderr.fileno())
 			sys.stdin.close()
-			os.closerange(3, 255)
-			os.execvp('wget', ['wget'] + args)
+			os.closerange(3, OSMaxFiles)
+			try: os.execvp('wget', ['wget'] + args)
+			except OSError as e: print e.message
 			os._exit(127)
 		os.close(writer)
 		return os.fdopen(reader, 'r')
@@ -671,7 +728,7 @@ class Download(BaseDownload):
 		wget_args.append(self.original_url)
 		try:
 			readhandle = self.spawn_wget(wget_args)
-		except OSError, e:
+		except OSError as e:
 			display_error(e)
 			return
 		
@@ -808,7 +865,7 @@ class Download(BaseDownload):
 			try:
 				os.kill(self['pid'], signal.SIGTERM)
 				self['status'] = S_STOP
-			except OSError, e:
+			except OSError as e:
 				if e.errno != os.errno.ESRCH:
 					raise e
 
@@ -867,12 +924,12 @@ class DataDownload(BaseDownload):
 				self.size = fh.tell()
 				fh.close()
 				self.percent = 100
-			except IOError, e:
+			except IOError as e:
 				raise Exception(e)
 			
 			self.running = False
 			self.mark_completed()
-		except Exception, e:
+		except Exception as e:
 			self['status'] = S_ERR
 			self.running = False
 			refresh_download_state(self)
@@ -928,12 +985,13 @@ def lock_row_refresh(doLock):
 	main_list.set_data('refresh-lock', doLock)
 	row = main_list.get_data('editing-row')
 	if doLock:
-		QUESTIONMARKS = '???'
-		row[COL_PRCSTR] = QUESTIONMARKS
-		row[COL_SPEED_STR] = QUESTIONMARKS
-		row[COL_STATUS_ICON] = StatusIcon[S_GUILOCK]
-		row[COL_STATUS] = _(Status[S_GUILOCK])
-		row[COL_ETA_STR] = QUESTIONMARKS
+		if row[COL_DLOBJ].running:
+			QUESTIONMARKS = '???'
+			row[COL_PRCSTR] = QUESTIONMARKS
+			row[COL_SPEED_STR] = QUESTIONMARKS
+			row[COL_STATUS_ICON] = StatusIcon[S_GUILOCK]
+			row[COL_STATUS] = _(Status[S_GUILOCK])
+			row[COL_ETA_STR] = QUESTIONMARKS
 	else:
 		refresh_download_state(row[COL_DLOBJ])
 
@@ -942,10 +1000,9 @@ def treeview_column0_editing(cellrenderer, editable, rownum):
 	main_list.set_data('editing-row', row)
 	dl = row[COL_DLOBJ]
 	if not os.path.exists(dl.outfile):
-		glib.idle_add(lambda: DownLoadList.set(row.iter, COL_NAMEEDITABLE, False), priority=glib.PRIORITY_DEFAULT_IDLE)
+		row[COL_NAMEEDITABLE] = False
 		return
-	if dl.running:
-		lock_row_refresh(True)
+	lock_row_refresh(True)
 
 def treeview_column0_edited(cellrenderer, itpathstr, newtext):
 	row = main_list.get_data('editing-row')
@@ -972,7 +1029,7 @@ def win_main_show():
 		col.set_data('signal-notify::width', sid)
 	
 	# Start background thread
-	continous_refresh_thread = threading.Thread(target=continous_refresh, args=(2,))
+	continous_refresh_thread = threading.Thread(target=continous_refresh, args=(60,))
 	continous_refresh_thread.daemon = True
 	continous_refresh_thread.start()
 	
@@ -1100,12 +1157,17 @@ class iter_downloadlist(object):
 	def __del__(self):
 		pass
 
+def called_by_self():
+	# Prevent Deadlock
+	stack = traceback.extract_stack()
+	selfname = stack[-2][2]
+	return any(c[2] == selfname for c in stack[:-2])
+
 def refresh_download_state_all():
 	return refresh_download_state(None)
 
 def refresh_download_state(dlobj):
-	if any(c[2] == 'refresh_download_state' for c in traceback.extract_stack()[:-1]):
-		# Prevent Deadlock
+	if called_by_self():
 		return
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
@@ -1238,6 +1300,7 @@ def on_completed_download(dl):
 				rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
 			if rename_to_filepath is not None:
 				rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
+				refresh_download_state(dl)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
 		SQ = '\''
@@ -1245,24 +1308,31 @@ def on_completed_download(dl):
 		shcmd = s.replace('{}', esc_filename)
 		run_detached('sh', ['-c', shcmd])
 
-def rename_downloaded_file(dl, newname, warnfail=True):
-	if dl.outfile == newname:
+def rename_downloaded_file(dl, newpath, warnfail=True):
+	if dl.outfile == newpath:
 		return None
-	if os.path.exists(newname):
-		display_error(_("Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>") % (glib.markup_escape_text(dl.outfile), glib.markup_escape_text(newname)), isPango=True, gtkErrorLevel=gtk.MESSAGE_WARNING)
+	if os.path.exists(newpath):
+		display_error(_("Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>") % (glib.markup_escape_text(dl.outfile), glib.markup_escape_text(newpath)), isPango=True, gtkErrorLevel=gtk.MESSAGE_WARNING)
 	else:
 		try:
-			os.rename(dl.outfile, newname)
-		except OSError, e:
-			if e.errno == os.errno.EXDEV:
-				pass # TODO copy+unlink
-			else:
-				e.filename = None
-				e.filenames = [dl.outfile, newname]
-				display_error(e)
+			try:
+				os.rename(dl.outfile, newpath)
+			except OSError as e:
+				if e.errno == os.errno.EXDEV:
+					cmd = run_synchronous('mv', ['--no-clobber', dl.outfile, newpath])
+					if cmd.exitcode != 0:
+						e = ShellCommandException()
+						e.message = cmd.stderr
+						e.errno = cmd.exitcode
+						raise e
+				else:
+					raise e
+		except (OSError, ShellCommandException) as e:
+			e.filename = None
+			e.filenames = [dl.outfile, newpath]
+			display_error(e)
 		else:
-			dl.outfile = newname
-			refresh_download_state(dl)
+			dl.outfile = newpath
 			return True
 	return False
 
@@ -1388,7 +1458,7 @@ def untrack_download_file(dl):
 def act_show_log(it, dl):
 	try:
 		fh = open(dl.logfile, 'r')
-	except IOError, e:
+	except IOError as e:
 		display_error(e)
 	else:
 		win_log = gtk.Window()
@@ -1622,6 +1692,7 @@ StatusIcon = {
 }
 # gwget cli options not requiring parameter
 CliOptNotReqParam = ['--cwd-prefix']
+OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 
 
 
