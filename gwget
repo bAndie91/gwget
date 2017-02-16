@@ -31,6 +31,7 @@ import magic
 import setproctitle
 import glob
 import base64
+import traceback
 
 
 PROGNAME = 'gwget'
@@ -923,31 +924,36 @@ def win_main_configure(win, evt):
 		w = col0.get_data('column-width')
 		treeview_column_set_width(col0, w+1)
 
-def lock_row_refresh(doLock, rowiter=None):
+def lock_row_refresh(doLock):
+	main_list.set_data('refresh-lock', doLock)
+	row = main_list.get_data('editing-row')
 	if doLock:
-		globals()['RenameLock'] = True
-		if rowiter is None:
-			# TODO !!
-			# - not dl.completed/running/refreshing(?)
-			# - editing which iterator?
-			rowiter = DownLoadList.get_iter(main_selection.get_selected_rows()[1][0])
-		DownLoadList[rowiter][COL_PRCSTR] = '???'
-		DownLoadList[rowiter][COL_SPEED_STR] = '???'
-		DownLoadList[rowiter][COL_STATUS_ICON] = StatusIcon[S_GUILOCK]
-		DownLoadList[rowiter][COL_STATUS] = _(Status[S_GUILOCK])
-		DownLoadList[rowiter][COL_ETA_STR] = '???'
+		QUESTIONMARKS = '???'
+		row[COL_PRCSTR] = QUESTIONMARKS
+		row[COL_SPEED_STR] = QUESTIONMARKS
+		row[COL_STATUS_ICON] = StatusIcon[S_GUILOCK]
+		row[COL_STATUS] = _(Status[S_GUILOCK])
+		row[COL_ETA_STR] = QUESTIONMARKS
 	else:
-		globals()['RenameLock'] = False
-		refresh_download_state_all()
+		refresh_download_state(row[COL_DLOBJ])
 
-def treeview_column0_editing(cellrenderer, editable, itpath):
-	lock_row_refresh(True)
+def treeview_column0_editing(cellrenderer, editable, rownum):
+	row = DownLoadList[(int(rownum),)]
+	main_list.set_data('editing-row', row)
+	dl = row[COL_DLOBJ]
+	if not os.path.exists(dl.outfile):
+		glib.idle_add(lambda: DownLoadList.set(row.iter, COL_NAMEEDITABLE, False), priority=glib.PRIORITY_DEFAULT_IDLE)
+		return
+	if dl.running:
+		lock_row_refresh(True)
 
-def treeview_column0_edited(cellrenderer, itpath, newtext):
-	dl = DownLoadList[itpath][COL_DLOBJ]
+def treeview_column0_edited(cellrenderer, itpathstr, newtext):
+	row = main_list.get_data('editing-row')
+	dl = row[COL_DLOBJ]
 	if dl.outfile:
 		if rename_downloaded_file(dl, os.path.join(os.path.dirname(dl.outfile), newtext)):
 			dl.manually_renamed = True
+			dl.params['rename_to'] = newtext
 	lock_row_refresh(False)
 
 def treeview_column0_edit_canceled(cellrenderer):
@@ -966,7 +972,7 @@ def win_main_show():
 		col.set_data('signal-notify::width', sid)
 	
 	# Start background thread
-	continous_refresh_thread = threading.Thread(target=continous_refresh, args=())
+	continous_refresh_thread = threading.Thread(target=continous_refresh, args=(2,))
 	continous_refresh_thread.daemon = True
 	continous_refresh_thread.start()
 	
@@ -1098,19 +1104,22 @@ def refresh_download_state_all():
 	return refresh_download_state(None)
 
 def refresh_download_state(dlobj):
+	if any(c[2] == 'refresh_download_state' for c in traceback.extract_stack()[:-1]):
+		# Prevent Deadlock
+		return
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
 	doAll = dlobj is None
 	for it, dl in iter_downloadlist():
 		row = DownLoadList[it]
 		if doAll or dlobj == dl:
-			if not globals()['RenameLock']:
+			if not(main_list.get_data('refresh-lock') and main_list.get_data('editing-row').path == DownLoadList[it].path):
 				if dl.outfile is None:
 					row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
 				else:
 					row[COL_NAME] = os.path.basename(dl.outfile)
 					if os.path.exists(dl.outfile):
-						row[COL_FEXISTS] = 1
+						row[COL_NAMEEDITABLE] = 1
 				
 				mime = dl.mime_local
 				if not mime:
@@ -1175,10 +1184,10 @@ def pulse_download(pid):
 		except KeyError:
 			pass
 
-def continous_refresh():
+def continous_refresh(wait):
 	while True:
 		refresh_download_state_all()
-		time.sleep(60)
+		time.sleep(wait)
 
 def start_next_download(prev_dl):
 	assert(prev_dl.get_url())
@@ -1260,7 +1269,7 @@ def rename_downloaded_file(dl, newname, warnfail=True):
 def DownLoadList_append_new(d):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
 	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
-	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_FEXISTS
+	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE
 	# DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, int, str, 
 	#   str, float, int, float, str, 
 	#   int, str, str, str, str, bool)
@@ -1453,10 +1462,10 @@ def on_urls_edited(buf):
 def on_treeview_click(tree, event):
 	if event_masked(event):
 		return False
-	pathinfo = main_list.get_path_at_pos(int(event.x), int(event.y))
-	if pathinfo is not None:
-		path, col, cellx, celly = pathinfo
-		it = DownLoadList.get_iter(path)
+	itpathinfo = main_list.get_path_at_pos(int(event.x), int(event.y))
+	if itpathinfo is not None:
+		itpath, col, cellx, celly = itpathinfo
+		it = DownLoadList.get_iter(itpath)
 		dl = DownLoadList[it][COL_DLOBJ]
 		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
 			main_selection.unselect_all()
@@ -1475,15 +1484,15 @@ def on_treeview_key(tree, event):
 		act_on_selection(act_clear_download)
 		return True
 	rows = main_selection.get_selected_rows()[1]
+	if len(rows) == 1:
+		it = DownLoadList.get_iter(rows[0])
 	if event.keyval == gtk.gdk.keyval_from_name('Menu'):
 		if len(rows) == 1:
-			it = DownLoadList.get_iter(rows[0])
 			x, y = tree.window.get_origin()
-			popup_context_menu(it, event, 3, placement_func=lambda d: (x, y, True))
+			popup_context_menu(it, event, 3, placement_func = lambda d: (x, y, True))
 			return True
 	if event.keyval in map(gtk.gdk.keyval_from_name, ['Return', 'KP_Enter']):
 		if len(rows) == 1:
-			it = DownLoadList.get_iter(rows[0])
 			dl = DownLoadList[it][COL_DLOBJ]
 			act_open_file(it, dl)
 		return True
@@ -1590,7 +1599,7 @@ XATTR_CHARSET = 'user.charset'
 MDASH_UTF8 = '—'
 MIME_DEFAULT = 'application/octet-stream'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
-COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_FEXISTS = range(17)
+COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE = range(17)
 DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str, bool)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP, S_GUILOCK = range(7)
 Status = {
@@ -1613,7 +1622,6 @@ StatusIcon = {
 }
 # gwget cli options not requiring parameter
 CliOptNotReqParam = ['--cwd-prefix']
-RenameLock = False
 
 
 
@@ -1707,7 +1715,7 @@ cr_txt.connect('edited', treeview_column0_edited)
 tvc0.pack_start(cr_pix, False)
 tvc0.pack_start(cr_txt, True)
 tvc0.add_attribute(cr_txt, 'text', COL_NAME)
-tvc0.add_attribute(cr_txt, 'editable', COL_FEXISTS)
+tvc0.add_attribute(cr_txt, 'editable', COL_NAMEEDITABLE)
 tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
 tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
 main_list.append_column(tvc0)
@@ -1770,7 +1778,7 @@ main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
-main_list.set_search_position_func() #TODO
+#main_list.set_search_position_func() #TODO
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
 main_list.drag_dest_set(0, [], 0)
