@@ -50,15 +50,16 @@ def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 		gtk.threads_enter()
 	text = None
 	if isinstance(e, OSError) or isinstance(e, IOError):
-		text = '%s (%d)\n%s' % (e.strerror, e.errno, e.filename or '; '.join(e.filenames or []))
+		files = e.filename or '; '.join(e.filenames or [])
+		text = '%s%s%s (%d)%s%s' % (e.message, e.message and '\n', e.strerror, e.errno, files and '\n', files or '')
 	elif isinstance(e, Exception):
 		text = e.message
 		if hasattr(e, 'errno'):
 			text += ' (%d)' % e.errno
 	elif type(e) == type([]):
-		text = ''.join(e)
+		text = '\n'.join(e)
 	if text is None:
-		text = str(e)
+		text = repr(e)
 	if isinstance(e, BaseException):
 		classname = e.__class__.__name__
 		if not e.__class__.__module__.startswith('_'):
@@ -437,6 +438,11 @@ def delete(f, warn=True):
 			display_error(e)
 			return False
 	return True
+
+def relative_path(target, start=None):
+	if start is None:
+		start = os.getcwd()
+	return os.path.relpath(target, os.path.realpath(start))
 
 class PropertyStore(object):
 	pass
@@ -1008,9 +1014,13 @@ def treeview_column0_edited(cellrenderer, itpathstr, newtext):
 	row = main_list.get_data('editing-row')
 	dl = row[COL_DLOBJ]
 	if dl.outfile:
-		if rename_downloaded_file(dl, os.path.join(os.path.dirname(dl.outfile), newtext)):
+		newpath = os.path.join(os.path.dirname(dl.outfile), newtext)
+		if rename_downloaded_file(dl, newpath):
 			dl.manually_renamed = True
-			dl.params['rename_to'] = newtext
+			if newtext.startswith(os.path.sep):
+				dl.params['rename_to'] = newpath
+			else:
+				dl.params['rename_to'] = relative_path(newpath, dl.params['--directory-prefix'])
 	lock_row_refresh(False)
 
 def treeview_column0_edit_canceled(cellrenderer):
@@ -1284,6 +1294,7 @@ def on_completed_download(dl):
 			rename_to_filepath = None
 			warnfail = False
 			if dl.params.has_key('rename_to'):
+				# User requested renaming
 				if dl.params['rename_to'].startswith(os.path.sep):
 					rename_to_filepath = dl.params['rename_to']
 				else:
@@ -1291,12 +1302,14 @@ def on_completed_download(dl):
 				mkdir(os.path.dirname(rename_to_filepath))
 				warnfail = True
 			elif isinstance(dl, DataDownload):
+				# Data scheme, guess extension from content
 				if dl.mime_local:
 					path, extold = os.path.splitext(dl.outfile)
 					extnew = guess_extension(dl.mime_local)
 					if extnew and extnew != extold:
 						rename_to_filepath = path + extnew
 			elif re.match('.*\?[^?]+=', dl.outfile):
+				# Otherwise strip URL query string from filename
 				rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
 			if rename_to_filepath is not None:
 				rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
@@ -1319,11 +1332,16 @@ def rename_downloaded_file(dl, newpath, warnfail=True):
 				os.rename(dl.outfile, newpath)
 			except OSError as e:
 				if e.errno == os.errno.EXDEV:
-					cmd = run_synchronous('mv', ['--no-clobber', dl.outfile, newpath])
-					if cmd.exitcode != 0:
-						e = ShellCommandException()
-						e.message = cmd.stderr
-						e.errno = cmd.exitcode
+					if dl.completed:
+						cmd = run_synchronous('mv', ['--no-clobber', dl.outfile, newpath])
+						if cmd.exitcode != 0:
+							e = ShellCommandException()
+							e.message = re.sub('\n*$', '', cmd.stderr)
+							e.errno = cmd.exitcode
+							raise e
+					else:
+						if e.message: e.message += '\n'
+						e.message += _("Refuse to move an incompleted file across filesystems.")
 						raise e
 				else:
 					raise e
