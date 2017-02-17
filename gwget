@@ -901,7 +901,7 @@ class DataDownload(BaseDownload):
 				meta, data = m.groups()
 				if meta is None: meta = ''
 			except ValueError:
-				raise Exception(_("Can not parse url."))
+				raise Exception(_("Can not parse URL."))
 			# Free memory:
 			self.original_url = None
 			for m in meta.split(';'):
@@ -1714,7 +1714,7 @@ OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 
 
 
-if '--help' in sys.argv or '-h' in sys.argv:
+if any(flag in sys.argv for flag in ['-h', '--help']):
 	print """Usage: gwget [gwget options] [wget options] [URLs...]
 gwget options:
   --proxy-url URL

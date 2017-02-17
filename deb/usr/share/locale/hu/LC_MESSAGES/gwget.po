@@ -224,3 +224,23 @@ msgstr "Átnevezni erre"
 msgid "Left empty to use filename provided by server/wget"
 msgstr "Hagyd üresen a szerver/wget szerinti fájlnév használatához"
 
+# file: gwget, line: 904
+msgid "Can not parse URL."
+msgstr "URL nem feldolgozható"
+
+# file: gwget, line: 925
+msgid "Unknown encoding: %s"
+msgstr "Ismeretlen kódolás: %s"
+
+# file: gwget, line: 1328
+msgid "Target already exists, not renaming.\nFile: <tt>%s</tt>\nTarget: <tt>%s</tt>"
+msgstr "A célfájl már létezik, nincs átnevezés.\nFájl: <tt>%s</tt>\nCélfájl: <tt>%s</tt>"
+
+# file: gwget, line: 1344
+msgid "Refuse to move an incompleted file across filesystems."
+msgstr "Nem helyezek át félkész letöltést másik fájlrendszerre."
+
+# file: gwget, line: 1700
+msgid "Editing"
+msgstr "Szerkesztés"
+
