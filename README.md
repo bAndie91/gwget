@@ -1,18 +1,4 @@
 
-## Key Bindings
-
-* `Ctrl-N` - New download dialog
-* `Ctrl-R` - Resume all downloads
-* `Ctrl-K` - Pause all downloads (mnemonic: Kill)
-* `Ctrl-L` - Show the log of the selected download
-* `Ctrl-P` - Show the parameters of the selected download
-* `Ctrl-O` - Options
-* `Ctrl-Q` - Quit
-* `Delete` - Remove download (entry only, not file)
-* `Return` - Open downloaded file
-* `Ctrl-Enter` - On New download dialog - Start downloading
-* `Ctrl-Shift-Enter` - On New download dialog - Queue downloads
-
 ## Features
 
 * invocation
@@ -43,6 +29,21 @@
 	* start only one download from the same domain at once
 	* queue only mode: not start anything
 	* select queued downloads when they have been queued
+
+## Key Bindings
+
+* `Ctrl-N` - New download dialog
+* `Ctrl-R` - Start/Resume all downloads
+* `Ctrl-K` - Pause all downloads (mnemonic: Kill)
+* `Ctrl-L` - Show the log of the selected download
+* `Ctrl-P` - Show the parameters of the selected download
+* `Ctrl-O` - Options
+* `Ctrl-Q` - Quit
+* `Delete` - Remove download (entry only, not file)
+* `Return` - Open downloaded file
+* `Space` - Rename in place
+* `Ctrl-Enter` - On New download dialog - Start downloading
+* `Ctrl-Shift-Enter` - On New download dialog - Queue downloads
 
 ## Screenshots
 
