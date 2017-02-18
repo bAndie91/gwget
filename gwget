@@ -6,38 +6,55 @@ import sys
 import signal
 import select
 import fcntl
-import gtk
-import gobject
-import glib
-import pango
-import gettext
 import re
-import threading
 import time
-import functools
-import urllib
-import urlparse
-import pickle
-try:
- import xattr
-except ImportError:
- xattr = None
-import dbus
-import dbus.service
-import dbus.glib
-import gio
-from mimetypes import guess_extension
-import magic
-import setproctitle
-import glob
-import base64
-import traceback
-import resource
 
 
 PROGNAME = 'gwget'
 APPNAME = 'hu.uucp.gwget'
 
+if any(flag in sys.argv for flag in ['-h', '--help']):
+	print """Usage: %s [gwget options] [wget options] [URLs...]
+%s options:
+  --proxy-url URL
+  --cookies NAME=VALUE[;NAME=VALUE[;...]]
+  --cwd-prefix
+  --rename-to FILENAME
+  --run-on-complete COMMAND""" % (PROGNAME, PROGNAME)
+	raise SystemExit(0)
+
+
+import dbus
+import dbus.service
+import dbus.glib
+import gettext
+import setproctitle
+import resource
+
+import glib
+import gobject
+import gio
+import gtk
+import pango
+import threading
+
+import pickle
+import traceback
+import functools
+
+import glob
+import base64
+import urllib
+import urlparse
+try:
+ import xattr
+except ImportError:
+ xattr = None
+from mimetypes import guess_extension
+import magic
+
+
+# Functions and Subroutines
 
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
@@ -1713,23 +1730,13 @@ CliOptNotReqParam = ['--cwd-prefix']
 OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 
 
-
-if any(flag in sys.argv for flag in ['-h', '--help']):
-	print """Usage: gwget [gwget options] [wget options] [URLs...]
-gwget options:
-  --proxy-url URL
-  --cookies NAME=VALUE[;NAME=VALUE[;...]]
-  --cwd-prefix
-  --rename-to FILENAME
-  --run-on-complete COMMAND"""
-	raise SystemExit(0)
-
 # Check if application is already running
 if dbus.SessionBus().request_name(APPNAME) != dbus.bus.REQUEST_NAME_REPLY_PRIMARY_OWNER:
 	stderr(PROGNAME+': '+_("Already running.")+'\n')
 	method = dbus.SessionBus().get_object(APPNAME, '/'+APPNAME.replace('.', '/')).get_dbus_method('new_download')
 	method(sys.argv, os.getcwd())
 	raise SystemExit(0)
+
 
 gtk.gdk.threads_init()
 mkdir(CacheFolder)
