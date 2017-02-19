@@ -223,7 +223,9 @@ class FileChooserEntry(gtk.HBox):
 	def get_text(self):
 		return self.Entry.get_text()
 	def set_text(self, text):
-		return self.Entry.set_text(text)
+		ent = self.Entry
+		ent.set_text(text)
+		ent.select_region(-1, -1)
 	def get_label(self):
 		return self.Label.get_text()
 	def set_label(self, text):
