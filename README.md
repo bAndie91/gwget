@@ -29,6 +29,9 @@
 	* start only one download from the same domain at once
 	* queue only mode: not start anything
 	* select queued downloads when they have been queued
+* i18n
+	* en
+	* hu_HU
 
 ## Key Bindings
 

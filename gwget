@@ -73,8 +73,10 @@ def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 		text = e.message
 		if hasattr(e, 'errno'):
 			text += ' (%d)' % e.errno
-	elif type(e) == type([]):
+	elif type(e) == list:
 		text = '\n'.join(e)
+	elif type(e) in [str, int]:
+		text = str(e)
 	if text is None:
 		text = repr(e)
 	if isinstance(e, BaseException):
