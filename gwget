@@ -1983,7 +1983,7 @@ p4l1b.set_markup(_("<small><i>(0 = infinite)</i></small>"))
 p4e3.set_visibility(False)
 btns_newdl.set_border_width(5)
 btn_new_save.connect('clicked', lambda b: new_download())
-btn_new_open.connect('clicked', lambda b: new_download(open=True))
+btn_new_open.connect('clicked', lambda b: new_download(doOpen=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 

@@ -7,7 +7,7 @@
 	* popup 'New Download' dialog when command line paramaters given
 * main interface
 	* support grouped actions: start, pause, clear
-	* coulmns
+	* columns
 		* Name - output file's name, or the filename part of the URL if output is not yet available
 		* Progress - percetange
 		* Status - Queued, Init, Downloading, Saved, Failed, Paused, Renaming
