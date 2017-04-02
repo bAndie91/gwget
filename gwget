@@ -380,9 +380,46 @@ class StockToolButton(gtk.ToolButton):
 		x, lbl = self.__get_children()
 		lbl.set_markup(markup)
 
+def SetAnyIcon(name, widget):
+	size = gtk.ICON_SIZE_MENU
+	def find_path(name):
+		dit = gtk.icon_theme_get_default()
+		for d1 in dit.get_search_path():
+			for d2 in ['hicolor', 'locolor']:
+				sizedirs = ['16x16', 'scalable']
+				try:
+					sizedirs.extend(os.listdir(os.path.join(d1,d2)))
+				except OSError:
+					continue
+				for d3 in sizedirs:
+					for ext in ['png', 'xpm', 'svg']:
+						p = os.path.join(d1,d2,d3,name+'.'+ext)
+						if os.path.exists(p):
+							return p
+		raise Exception("Icon not found: '%s'" % name)
+	
+	if name in gtk.stock_list_ids():
+		aux = gtk.ImageMenuItem(stock_id=name)
+		img = aux.get_image()
+	else:
+		dit = gtk.icon_theme_get_default()
+		img = gtk.Image()
+		if dit.has_icon(name):
+			pxb = dit.load_icon(name, size, 0)
+			img.set_from_pixbuf(pxb)
+		else:
+			try:
+				iconpath = find_path(name)
+				img.set_from_file(iconpath)
+			except:
+				pass
+	widget.set_image(img)
+
 class StockMenuItem(gtk.ImageMenuItem):
 	def __init__(self, label=None, stock_id=None, accel_group=None):
 		gtk.ImageMenuItem.__init__(self, stock_id, accel_group)
+		if stock_id not in gtk.stock_list_ids():
+			SetAnyIcon(stock_id, self)
 		if label is not None:
 			self.set_label(label)
 
@@ -1477,6 +1514,12 @@ def act_open_file(it, dl):
 def act_open_folder(it, dl):
 	run_detached('mimeopen-gui', [dl.params['--directory-prefix']])
 
+def act_open_referer(it, dl):
+	run_detached('mimeopen-gui', [dl.params['--referer']])
+
+def act_open_clipboard(it, dl):
+	Clipboard.set_text(dl.outfile)
+
 def act_start(it, dl):
 	dl.start()
 
@@ -1759,6 +1802,7 @@ if dbus.SessionBus().request_name(APPNAME) != dbus.bus.REQUEST_NAME_REPLY_PRIMAR
 
 gtk.gdk.threads_init()
 mkdir(CacheFolder)
+Clipboard = gtk.Clipboard(selection='CLIPBOARD')
 
 
 ### Build GUI ###
@@ -1773,8 +1817,12 @@ scroller = gtk.ScrolledWindow()
 main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
+ContextMenuOpen = gtk.Menu()
 cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
-cmi_folder = StockMenuItem(_("Open Folder"), gtk.STOCK_DIRECTORY)
+cmi_open_file = StockMenuItem(None, gtk.STOCK_OPEN)
+cmi_open_folder = StockMenuItem(_("Open Folder"), gtk.STOCK_DIRECTORY)
+cmi_open_referer = StockMenuItem(_("Open Website"), 'applications-internet')
+cmi_open_clipboard = StockMenuItem(_("Copy path"), gtk.STOCK_COPY)
 cmi_remove = StockMenuItem(_("Delete File"), gtk.STOCK_DELETE)
 cmi_refetch = StockMenuItem(_("Re-download"), gtk.STOCK_REFRESH)
 cmi_resume = StockMenuItem(_("Resume"), gtk.STOCK_MEDIA_PLAY)
@@ -1902,8 +1950,10 @@ main_list.connect('drag-drop', DnD_accept)
 main_list.connect('drag-data-received', DnD_receive)
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
-cmi_open.connect('activate', on_context_menu, act_open_file)
-cmi_folder.connect('activate', on_context_menu, act_open_folder)
+cmi_open_file.connect('activate', on_context_menu, act_open_file)
+cmi_open_folder.connect('activate', on_context_menu, act_open_folder)
+cmi_open_referer.connect('activate', on_context_menu, act_open_referer)
+cmi_open_clipboard.connect('activate', on_context_menu, act_open_clipboard)
 cmi_remove.connect('activate', on_context_menu, act_remove_download)
 cmi_refetch.connect('activate', on_context_menu, act_refetch)
 cmi_resume.connect('activate', on_context_menu, act_start)
@@ -1920,7 +1970,11 @@ box_main.pack_start(scroller, 1, 1)
 scroller.add_with_viewport(main_list)
 scroller.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
 ContextMenu.append(cmi_open)
-ContextMenu.append(cmi_folder)
+cmi_open.set_submenu(ContextMenuOpen)
+ContextMenuOpen.append(cmi_open_file)
+ContextMenuOpen.append(cmi_open_folder)
+ContextMenuOpen.append(cmi_open_referer)
+ContextMenuOpen.append(cmi_open_clipboard)
 ContextMenu.append(cmi_remove)
 ContextMenu.append(gtk.SeparatorMenuItem())
 ContextMenu.append(cmi_refetch)
