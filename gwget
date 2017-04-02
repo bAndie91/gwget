@@ -257,7 +257,7 @@ class FileChooserEntry(gtk.HBox):
 		for menuitem in historymenu.get_children():
 			historymenu.remove(menuitem)
 		for label in items:
-			menuitem = gtk.MenuItem(label)
+			menuitem = gtk.MenuItem(label, use_underline=False)
 			menuitem.connect('activate', lambda mi: self.set_text(mi.get_label()))
 			historymenu.append(menuitem)
 		historymenu.show_all()
