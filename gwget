@@ -1561,7 +1561,7 @@ def act_show_log(it, dl):
 		win_log = gtk.Window()
 		txv = ScrolledTextView()
 		win_log.set_default_size(675, 345)
-		win_log.set_title(_("Log - %s") % (dl.original_url))
+		win_log.set_title(_("Log - %s") % (os.path.basename(dl.logfile)))
 		win_log.set_icon_name('emblem-downloads')
 		win_log.connect('delete-event', lambda w,e: w.destroy())
 		add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
