@@ -285,6 +285,8 @@ class ScrolledTextView(gtk.ScrolledWindow):
 		return bufr.set_text(text)
 	def grab_focus(self):
 		return self.TextView.grab_focus()
+	def get_textview(self):
+		return self.TextView
 
 class LabelledEntry(gtk.HBox):
 	def __init__(self, label='', markup=None, tooltip=None, spacing=2):
@@ -780,8 +782,14 @@ class Download(BaseDownload):
 			return
 		self.init()
 		refresh_download_state(self)
-		if not delete(self.logfile, warn=False):
-			return
+		if os.path.exists(self.logfile):
+			logfilename, logfiledotext = os.path.splitext(self.logfile)
+			savelogfile = '%s_%d%s' % (logfilename, next_file_number(logfilename+'_', logfiledotext, 2), logfiledotext)
+			try:
+				os.rename(self.logfile, savelogfile)
+			except OSError, e:
+				# treat this not a serious error
+				stderr(e.message + '\n')
 		
 		wget_args = []
 		for k, v in self.params.iteritems():
@@ -1553,25 +1561,35 @@ def untrack_download_file(dl):
 	delete(dl.logfile)
 
 def act_show_log(it, dl):
+	def add_context_menuitems(txv, menu, scrtxv):
+		menu.append(gtk.SeparatorMenuItem())
+		mi = StockMenuItem(None, gtk.STOCK_REFRESH)
+		mi.connect('activate', lambda mi, *userparams: simple_load_file_into_scrolledtextview(*userparams), dl.logfile, scrtxv)
+		menu.append(mi)
+		menu.show_all()
+	
+	win_log = gtk.Window()
+	scrtxv = ScrolledTextView()
+	win_log.set_default_size(675, 345)
+	win_log.set_title(_("Log - %s") % (os.path.basename(dl.logfile)))
+	win_log.set_icon_name('emblem-downloads')
+	win_log.connect('delete-event', lambda w,e: w.destroy())
+	add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
+	win_log.set_transient_for(win_main)
+	win_log.set_modal(True)
+	win_log.add(scrtxv)
+	scrtxv.set_editable(False)
+	scrtxv.get_textview().connect('populate-popup', add_context_menuitems, scrtxv)
+	win_log.show_all()
+	simple_load_file_into_scrolledtextview(dl.logfile, scrtxv)
+
+def simple_load_file_into_scrolledtextview(filepath, textview):
 	try:
-		fh = open(dl.logfile, 'r')
+		fh = open(filepath, 'r')
+		textview.set_text(''.join(fh.readlines()))
+		fh.close()
 	except IOError as e:
 		display_error(e)
-	else:
-		win_log = gtk.Window()
-		txv = ScrolledTextView()
-		win_log.set_default_size(675, 345)
-		win_log.set_title(_("Log - %s") % (os.path.basename(dl.logfile)))
-		win_log.set_icon_name('emblem-downloads')
-		win_log.connect('delete-event', lambda w,e: w.destroy())
-		add_key_binding(win_log, 'Escape', lambda a,b,c,d: win_log.destroy() or True)
-		win_log.set_transient_for(win_main)
-		win_log.set_modal(True)
-		win_log.add(txv)
-		txv.set_text(''.join(fh.readlines()))
-		txv.set_editable(False)
-		win_log.show_all()
-		fh.close()
 
 def act_props(it, dl):
 	#print dl.__dict__
