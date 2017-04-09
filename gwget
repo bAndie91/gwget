@@ -197,7 +197,7 @@ class FileEntryCompletion(gtk.EntryCompletion):
 			entry.set_data('saved-dirname', curdir)
 			self.model.clear()
 			try:
-				for f in os.listdir(curdir):
+				for f in sorted(os.listdir(curdir)):
 					p = os.path.join(curdir, f)
 					if os.path.isdir(p):
 						p += '/'
