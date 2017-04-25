@@ -1,0 +1,3 @@
+/deb/DEBIAN/md5sums
+/deb/usr/share/locale/*/LC_MESSAGES/*.mo
+/*.deb
