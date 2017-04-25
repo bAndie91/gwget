@@ -1190,12 +1190,17 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 					params_def()
 		if params.has_key('--directory-prefix'):
 			prepend_uniq(LastFolders, params['--directory-prefix'])
-		urls = '\n'.join(cliURLs) + '\n'
+		old_urls = p1t1.get_text()
+		new_urls = '\n'.join(cliURLs) + '\n'
 		if win_newdl.props.visible and append_url:
-			old_urls = p1t1.get_text()
-			urls = old_urls + ('' if old_urls[-1] == '\n' else '\n') + urls
-		reset_parameters(params)
-		p1t1.set_text(urls)
+			new_urls = old_urls + ('' if len(old_urls)==0 or old_urls[-1] == '\n' else '\n') + new_urls
+		if win_newdl.props.visible and len(old_urls.strip()):
+			# Don't reset parameter widgets as it's a subsequent gwget call,
+			# while New Download window is open and something typed in URLs field.
+			pass
+		else:
+			reset_parameters(params)
+		p1t1.set_text(new_urls)
 		show_win_newdl()
 
 def act_quit():
@@ -1464,6 +1469,7 @@ def start_new_download(url, params, start=True):
 	return it
 
 def reset_parameters(params={}):
+	# Empty, then Fill widgets with given wget parameters.
 	for wdg in p1t1, p1e1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
 		wdg.set_text('')
 	p1s2.set_value(0)
@@ -1562,10 +1568,10 @@ def untrack_download_file(dl):
 
 def act_show_log(it, dl):
 	def add_context_menuitems(txv, menu, scrtxv):
-		menu.append(gtk.SeparatorMenuItem())
+		menu.prepend(gtk.SeparatorMenuItem())
 		mi = StockMenuItem(None, gtk.STOCK_REFRESH)
 		mi.connect('activate', lambda mi, *userparams: simple_load_file_into_scrolledtextview(*userparams), dl.logfile, scrtxv)
-		menu.append(mi)
+		menu.prepend(mi)
 		menu.show_all()
 	
 	win_log = gtk.Window()
@@ -1685,10 +1691,13 @@ def on_treeview_key(tree, event):
 
 
 ## New Download window
+
+# Start new download(s)
 def new_download(start=True, doOpen=False):
 	selected_folder = p1c1.get_text()
 	prepend_uniq(LastFolders, selected_folder)
 	
+	# Read widgets and build up wget parameters.
 	params = {}
 	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
 		data = wdg.get_text()
