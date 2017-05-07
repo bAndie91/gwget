@@ -244,3 +244,22 @@ msgstr "Nem helyezek át félkész letöltést másik fájlrendszerre."
 msgid "Editing"
 msgstr "Szerkesztés"
 
+# file: gwget, line: 402
+msgid "Icon not found: '%s'"
+msgstr "Ikon nem található: '%s'"
+
+# file: gwget, line: 1911
+msgid "Open Website"
+msgstr "Weboldal megnyitása"
+
+# file: gwget, line: 1912
+msgid "Copy path"
+msgstr "Útvonal másolása"
+
+# file: gwget, line: 2113
+msgid "Content-Disposition filename"
+msgstr "Content-Disposition fájlnév"
+
+# file: gwget, line: 2138
+msgid "wget parses Content-Disposition header for filename"
+msgstr "a wget dolgozza fel a Content-Disposition fejlécet a fájlnév megállapítása végett"
