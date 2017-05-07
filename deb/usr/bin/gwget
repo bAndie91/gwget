@@ -759,7 +759,6 @@ class Download(BaseDownload):
 	def get_url(self):
 		return self.actual_url or self.original_url
 	def spawn_wget(self, args=[]):
-		print args
 		reader, writer = os.pipe()
 		pid = os.fork()
 		if pid == 0:
@@ -793,26 +792,10 @@ class Download(BaseDownload):
 				# treat this not a serious error
 				stderr(e.message + '\n')
 		
-		wget_args = []
-		for k, v in self.params.iteritems():
-			if k.startswith('-'):
-				if hasattr(v, '__iter__'):
-					for v1 in v:
-						wget_args.append(k)
-						wget_args.append(v1)
-				else:
-					if k.startswith('--') and v is False:
-						k = '--no-' + k[2:]
-					wget_args.append(k)
-					if v is not True and v is not False and v is not None:
-						wget_args.append(v)
-			elif k == '':
-				# append custom options
-				for v1 in v:
-					wget_args.append(v1)
-		wget_args += ['--verbose', '--output-file', self.logfile, \
-		  '--background', '--continue', '--progress', self.progress_type, \
-		  '--adjust-extension', '--content-disposition', '--retry-connrefused', \
+		wget_args = ParamDispatcher.convert_to_wget_args(self.params)
+		wget_args += ['--verbose', '--output-file', self.logfile,\
+		  '--background', '--continue', '--progress', self.progress_type,\
+		  '--adjust-extension', '--retry-connrefused',\
 		  '--auth-no-challenge']
 		wget_args.append(self.original_url)
 		try:
@@ -1142,7 +1125,10 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 			else:
 				key = arg
 				val = None
-				if key not in CliOptNotReqParam and idx+1 < len(argv):
+				if key.startswith('--no-'):
+					key = '--' + key[5:]
+					val = False
+				elif key not in ParameterlessOptions and idx+1 < len(argv):
 					argnext = argv[idx+1]
 					if not argnext.startswith('-'):
 						val = argnext
@@ -1154,46 +1140,20 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 	
 	# Start downloads given in CLI
 	if cliURLs:
-		params = {'': [], '--header': [],}
-		def params_def():
-			if optval == False:
-				params[''] += ['--no'+optnam[2:]]
-			else:
-				params[''] += [optnam]
-				if optval not in [None, True]:
-					params[''] += [optval]
+		params = {}
 		for optnam, optval in cliOpts:
-			if optnam == '--proxy-url':
-				params['proxy'] = optval
-			elif optnam == '--cookies':
-				params['--header'] += ['Cookie: ' + optval]
-			elif optnam == '--rename-to':
-				params['rename_to'] = optval
-			elif optnam == '--run-on-complete':
-				params['on_complete'] = optval
+			if ShortLongOptions.has_key(optnam):
+				optnam = ShortLongOptions[optnam]
+			if optnam == '--cookies':
+				# FIXME
+				optval = ['Cookie: ' + optval]
 			elif optnam == '--cwd-prefix':
-				params['--directory-prefix'] = cwd or os.getcwd()
-			else:
-				if optnam in ShortLongOptions.keys():
-					optnam = ShortLongOptions[optnam]
-				# Generate dict for wget options according to returning types of getter() of each ParamWidgets
-				if optnam in ParamWidgets.keys():
-					wdg, getter, putter = ParamWidgets[optnam]
-					if putter is None or putter(optval):
-						if getter is not None:
-							dummydata = getter('x')
-							if hasattr(dummydata, '__iter__'):
-								if not params.has_key(optnam):
-									params[optnam] = []
-								params[optnam] += [optval]
-							else:
-								params[optnam] = optval
-						else:
-							params[optnam] = optval
-					else:
-						params_def()
-				else:
-					params_def()
+				optval = cwd or os.getcwd()
+			if GWgetOptionsParam.has_key(optnam):
+				optnam = GWgetOptionsParam[optnam]
+			# Generate dict for wget options according to returning type of each ParamDispatcher
+			for prmdisp in ParamDispatchers.values():
+				prmdisp.cond_update_params_dict(params, optnam, optval)
 		if params.has_key('--directory-prefix'):
 			prepend_uniq(LastFolders, params['--directory-prefix'])
 		old_urls = p1t1.get_text()
@@ -1479,7 +1439,6 @@ def reset_parameters(params={}):
 		if params.has_key(opt):
 			# Fill widgets with given wget parameters.
 			prmdisp.set_value(params[opt])
-			# TODO: workaround for non-Cookie --header's
 		else:
 			# Reset widget to empty/default values.
 			prmdisp.set_value(None)
@@ -1693,24 +1652,13 @@ def on_treeview_key(tree, event):
 
 # Start new download(s)
 def new_download(start=True, doOpen=False):
-	selected_folder = p1c1.get_text()
+	selected_folder = ParamDispatchers['--directory-prefix'].get_value()
 	prepend_uniq(LastFolders, selected_folder)
 	
 	# Read widgets and build up wget parameters.
 	params = {}
-	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
-		if getter is None:
-			data = wdg.get_text()
-		else:
-			data = getter(wdg)
-		if data is not None:
-			if hasattr(data, '__iter__') and params.has_key(flag):
-				# Returning type is list, append to the existing list
-				params[flag] += data
-			else:
-				# Returning type is not list, 
-				# or it is a list but there is no corresponding key in params.
-				params[flag] = data
+	for prmdisp in ParamDispatchers.values():
+		prmdisp.update_params_dict(params)
 	if doOpen:
 		params['on_complete'] = 'mimeopen-gui {}'
 	params['runnable'] = start
@@ -1784,22 +1732,69 @@ class ParamDispatcher(object):
 	def __init__(self, widget, optname):
 		self.widget = widget
 		self.optname = optname
+		self.optname_neg = '--no-' + optname[2:]
 		self.ext_getter = None
 		self.ext_setter = None
-	def get_wget_args(self):
-		args = []
+	@staticmethod
+	def convert_to_wget_args(params):
+		wget_args_all = []
+		for k, v in params.iteritems():
+			if k.startswith('-'):
+				if type(v) == list:
+					for v1 in v:
+						wget_args_all.append(k)
+						wget_args_all.append(v1)
+				elif v != '':
+					if k.startswith('--') and v is False:
+						k = '--no-' + k[2:]
+					wget_args_all.append(k)
+					if v not in [True, False, None]:
+						wget_args_all.append(v)
+			elif k == '':
+				# append custom options
+				for v1 in v:
+					wget_args_all.append(v1)
+		return wget_args_all
+	@staticmethod
+	def update_unknown_param(params, option, optval=None):
+		if not params.has_key(''):
+			params[''] = []
+		if optval is False:
+			params[''] += ['--no-' + option[2:]]
+		else:
+			params[''] += [option]
+			if optval not in [None, True]:
+				params[''] += [optval]
+	def cond_update_params_dict(self, params, optnam, optval):
+		if optnam not in [self.optname, self.optname_neg]:
+			return False
+		if self.optname in ParameterlessOptions and optval is None:
+			optval = (optnam == self.optname)
+		self.set_value(optval)
+		self.update_params_dict(params)
+	def update_params_dict(self, params):
 		val = self.get_value()
-		if val is not None:
+		if val is None:
+			if params.has_key(self.optname):
+				del params[self.optname]
+		else:
 			typ = type(val)
 			if typ == bool:
-				if val:
-					args += [self.optname]
-				else:
-					args += ['--no-' + self.optname[2:]]
-			else:
-				args += [self.optname, str(val)]
-		print "PrmDisp: wget args %s -> [%s]" % (self.optname, ' '.join(args))
-		return args
+				if val and params.has_key(self.optname_neg):
+					del params[self.optname_neg]
+				elif not val and params.has_key(self.optname):
+					del params[self.optname]
+			if typ in [float, int]:
+				params[self.optname] = str(int(val))
+			elif typ == list:
+				# Returning type is list, append to the list of values.
+				if not params.has_key(self.optname):
+					params[self.optname] = []
+				if type(params[self.optname]) != list:
+					params[self.optname] = [params[self.optname]]
+				params[self.optname] += val
+			elif val != '':
+				params[self.optname] = val
 	def get_value(self):
 		# Get value by method proper to widget type
 		if isinstance(self.widget, gtk.CheckButton):
@@ -1814,8 +1809,7 @@ class ParamDispatcher(object):
 			if len(sgn.args) < 2 and sgn.varargs is None:
 				val = self.ext_getter(val)
 			else:
-				val = self.ext_getter(val, widget)
-		print "PrmDisp: %s -> %s" % (self.optname, repr(val))
+				val = self.ext_getter(val, self.widget)
 		return val
 	def set_getter(self, fnc):
 		self.ext_getter = fnc
@@ -1830,17 +1824,16 @@ class ParamDispatcher(object):
 				if len(sgn.args) < 2 and sgn.varargs is None:
 					val = self.ext_setter(val)
 				else:
-					val = self.ext_setter(val, widget)
+					val = self.ext_setter(val, self.widget)
 		
 		if isinstance(self.widget, gtk.CheckButton):
-			self.widget.set_active(not not val)
+			self.widget.set_active(bool(val))
 		elif isinstance(self.widget, gtk.SpinButton):
 			if val is None: val = 0
 			self.widget.set_value(int(val))
 		else:
 			if val is None: val = ''
 			self.widget.set_text(str(val))
-		print "PrmDisp: %s <- %s" % (self.optname, repr(val))
 	def set_putter(self, fnc):
 		self.ext_setter = fnc
 
@@ -1882,7 +1875,7 @@ StatusIcon = {
 	S_GUILOCK: gtk.STOCK_EDIT,
 }
 # gwget cli options not requiring parameter
-CliOptNotReqParam = ['--cwd-prefix']
+ParameterlessOptions = ['--cwd-prefix', '--content-disposition']
 OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 
 
@@ -2160,10 +2153,11 @@ ParamDispatcherExtends = {
 		lambda a, w: a if w.get_visible() else None,\
 		None),
 	'--limit-rate': (p1s2,\
-		lambda a: a+'k',\
+		lambda a: "%dk" % (a,),\
 		lambda b: convert_to_bytes(b, 'k')),
 	'--load-cookies': (p2c1, None, None),
 	'--header': (p2t1,\
+		# FIXME: non-Cookie headers
 		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
 		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n'),
 	'--post-data': (p3t1,\
@@ -2181,10 +2175,19 @@ ParamDispatcherExtends = {
 		lambda b: ' '.join(b)),
 	'on_complete': (p4e8, None, None),
 }
+# Map short wget options to long ones.
 ShortLongOptions = {
 	'-P': '--directory-prefix',
 	'-t': '--tries',
 	'-U': '--user-agent',
+}
+# Map gwget cli options to ParamDispatcher keys.
+GWgetOptionsParam = {
+	'--proxy-url': 'proxy',
+	'--cookies': '--header',
+	'--rename-to': 'rename_to',
+	'--run-on-complete': 'on_complete',
+	'--cwd-prefix': '--directory-prefix',
 }
 for wdg, dflt in (p1s2, 0), (p4s1, 1), (p4c1, True):
 	wdg.set_data('default-value', dflt)
