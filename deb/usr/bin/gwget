@@ -41,6 +41,7 @@ import threading
 import pickle
 import traceback
 import functools
+import inspect
 
 import glob
 import base64
@@ -758,6 +759,7 @@ class Download(BaseDownload):
 	def get_url(self):
 		return self.actual_url or self.original_url
 	def spawn_wget(self, args=[]):
+		print args
 		reader, writer = os.pipe()
 		pid = os.fork()
 		if pid == 0:
@@ -1154,9 +1156,12 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 	if cliURLs:
 		params = {'': [], '--header': [],}
 		def params_def():
-			params[''] += [optnam]
-			if optval is not None:
-				params[''] += [optval]
+			if optval == False:
+				params[''] += ['--no'+optnam[2:]]
+			else:
+				params[''] += [optnam]
+				if optval not in [None, True]:
+					params[''] += [optval]
 		for optnam, optval in cliOpts:
 			if optnam == '--proxy-url':
 				params['proxy'] = optval
@@ -1171,6 +1176,7 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 			else:
 				if optnam in ShortLongOptions.keys():
 					optnam = ShortLongOptions[optnam]
+				# Generate dict for wget options according to returning types of getter() of each ParamWidgets
 				if optnam in ParamWidgets.keys():
 					wdg, getter, putter = ParamWidgets[optnam]
 					if putter is None or putter(optval):
@@ -1381,7 +1387,7 @@ def on_completed_download(dl):
 			warnfail = False
 			if dl.params.has_key('rename_to'):
 				# User requested renaming
-				if dl.params['rename_to'].startswith(os.path.sep):
+				if os.path.isabs(dl.params['rename_to']):
 					rename_to_filepath = dl.params['rename_to']
 				else:
 					rename_to_filepath = os.path.join(dl.params['--directory-prefix'], dl.params['rename_to'])
@@ -1469,21 +1475,14 @@ def start_new_download(url, params, start=True):
 	return it
 
 def reset_parameters(params={}):
-	# Empty, then Fill widgets with given wget parameters.
-	for wdg in p1t1, p1e1, p2c1, p2t1, p3t1, p4e2, p4e3, p4e4, p4e5, p4e6, p4e7, p4e8:
-		wdg.set_text('')
-	p1s2.set_value(0)
-	p4s1.set_value(1)
-	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
-		if params.has_key(flag):
-			data = params[flag]
-			if putter is not None:
-				data = putter(data)
-			if type(data) == int:
-				wdg.set_value(data)
-			elif data:
-				wdg.set_text(data)
+	for opt, prmdisp in ParamDispatchers.iteritems():
+		if params.has_key(opt):
+			# Fill widgets with given wget parameters.
+			prmdisp.set_value(params[opt])
 			# TODO: workaround for non-Cookie --header's
+		else:
+			# Reset widget to empty/default values.
+			prmdisp.set_value(None)
 
 def show_win_newdl():
 	win_newdl.show()
@@ -1700,13 +1699,17 @@ def new_download(start=True, doOpen=False):
 	# Read widgets and build up wget parameters.
 	params = {}
 	for flag, (wdg, getter, putter) in ParamWidgets.iteritems():
-		data = wdg.get_text()
-		if getter is not None:
-			data = getter(data)
-		if data:
+		if getter is None:
+			data = wdg.get_text()
+		else:
+			data = getter(wdg)
+		if data is not None:
 			if hasattr(data, '__iter__') and params.has_key(flag):
+				# Returning type is list, append to the existing list
 				params[flag] += data
 			else:
+				# Returning type is not list, 
+				# or it is a list but there is no corresponding key in params.
 				params[flag] = data
 	if doOpen:
 		params['on_complete'] = 'mimeopen-gui {}'
@@ -1776,6 +1779,70 @@ class GwgetService(dbus.service.Object):
 			self.win.present()
 		main_parse_cli(args, append_url=True, cwd=cwd)
 		gtk.threads_leave()
+
+class ParamDispatcher(object):
+	def __init__(self, widget, optname):
+		self.widget = widget
+		self.optname = optname
+		self.ext_getter = None
+		self.ext_setter = None
+	def get_wget_args(self):
+		args = []
+		val = self.get_value()
+		if val is not None:
+			typ = type(val)
+			if typ == bool:
+				if val:
+					args += [self.optname]
+				else:
+					args += ['--no-' + self.optname[2:]]
+			else:
+				args += [self.optname, str(val)]
+		print "PrmDisp: wget args %s -> [%s]" % (self.optname, ' '.join(args))
+		return args
+	def get_value(self):
+		# Get value by method proper to widget type
+		if isinstance(self.widget, gtk.CheckButton):
+			val = self.widget.get_active()
+		elif isinstance(self.widget, gtk.SpinButton):
+			val = self.widget.get_value()
+		else:
+			val = self.widget.get_text()
+		if self.ext_getter:
+			# Filter value by extender function
+			sgn = inspect.getargspec(self.ext_getter)
+			if len(sgn.args) < 2 and sgn.varargs is None:
+				val = self.ext_getter(val)
+			else:
+				val = self.ext_getter(val, widget)
+		print "PrmDisp: %s -> %s" % (self.optname, repr(val))
+		return val
+	def set_getter(self, fnc):
+		self.ext_getter = fnc
+	def put_wget_args(self, args):
+		pass
+	def set_value(self, val):
+		if val is None:
+			val = self.widget.get_data('default-value')
+		else:
+			if self.ext_setter:
+				sgn = inspect.getargspec(self.ext_setter)
+				if len(sgn.args) < 2 and sgn.varargs is None:
+					val = self.ext_setter(val)
+				else:
+					val = self.ext_setter(val, widget)
+		
+		if isinstance(self.widget, gtk.CheckButton):
+			self.widget.set_active(not not val)
+		elif isinstance(self.widget, gtk.SpinButton):
+			if val is None: val = 0
+			self.widget.set_value(int(val))
+		else:
+			if val is None: val = ''
+			self.widget.set_text(str(val))
+		print "PrmDisp: %s <- %s" % (self.optname, repr(val))
+	def set_putter(self, fnc):
+		self.ext_setter = fnc
 
 
 
@@ -2050,6 +2117,7 @@ p4e3 = LabelledEntry(label=_("Password"))
 p4e4 = LabelledEntry(label=_("Proxy URL"))
 p4e5 = LabelledEntry(label=_("Referer"))
 p4e6 = LabelledEntry(label=_("User Agent"))
+p4c1 = gtk.CheckButton(label=_("Content Disposition filename"))
 p4e7 = LabelledEntry(label=_("Custom options"), tooltip=_("type further options for wget\nsee 'wget --help' or 'man wget'"))
 p4e8 = LabelledEntry(label=_("Run on complete"), tooltip=_("type a shell command-line\npair of curly brackets are substituted with downloaded file name\nexample: xdg-open {} && rm {}"))
 btns_newdl = gtk.HBox(spacing=5)
@@ -2067,9 +2135,6 @@ win_newdl.connect('delete-event', lambda w,e: w.hide() or True)
 add_key_binding(win_newdl, 'Escape', lambda a,b,c,d: win_newdl.hide() or True)
 add_key_binding(win_newdl, '<Control>Return', lambda a,b,c,d: new_download() or True)
 add_key_binding(win_newdl, '<Control><Shift>Return', lambda a,b,c,d: new_download(start=False) or True)
-for label in p1l1, p2l1, p1l2a, p1l2b, p3l1, p4l1a, p4l1b:
-	label.set_alignment(0, 0)
-	label.set_padding(4, 5)
 for spinner in p1s2, p4s1:
 	spinner.set_numeric(True)
 	spinner.set_alignment(1.0)
@@ -2077,30 +2142,43 @@ p1t1.get_buffer().connect('changed', on_urls_edited)
 p1l2b.set_markup(_("kB/s <small><i>(0 = unlimited)</i></small>"))
 p4l1b.set_markup(_("<small><i>(0 = infinite)</i></small>"))
 p4e3.set_visibility(False)
+p4c1.set_tooltip_text(_("wget parses Content-Disposition header for filename"))
 btns_newdl.set_border_width(5)
 btn_new_save.connect('clicked', lambda b: new_download())
 btn_new_open.connect('clicked', lambda b: new_download(doOpen=True))
 btn_new_queue.connect('clicked', lambda b: new_download(start=False))
 btn_new_no.connect('clicked', lambda b: win_newdl.hide() or True)
 
-ParamWidgets = {
-	'--directory-prefix': (p1c1, lambda a: a if a!='' else os.getcwd(), None),
-	'rename_to': (p1e1, lambda a: a if p1e1.get_visible() else None, None),
+
+
+
+ParamDispatcherExtends = {
+	'--directory-prefix': (p1c1,\
+		lambda a: a if a!='' else os.getcwd(),\
+		None),
+	'rename_to': (p1e1,\
+		lambda a, w: a if w.get_visible() else None,\
+		None),
+	'--limit-rate': (p1s2,\
+		lambda a: a+'k',\
+		lambda b: convert_to_bytes(b, 'k')),
 	'--load-cookies': (p2c1, None, None),
 	'--header': (p2t1,\
 		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
-		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n' ),
+		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n'),
 	'--post-data': (p3t1,\
 		lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
-		lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n' ),
-	'--tries': (p4s1, None, lambda b: int(b) ),
+		lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n'),
+	'--tries': (p4s1, None, None),
 	'--user': (p4e2, None, None),
 	'--password': (p4e3, None, None),
 	'proxy': (p4e4, None, None),
 	'--referer': (p4e5, None, None),
 	'--user-agent': (p4e6, None, None),
-	'--limit-rate': (p1s2, lambda a: a+'k', lambda b: int(convert_to_bytes(b, 'k')) ),
-	'': (p4e7, lambda a: a.split(), lambda b: ' '.join(b) ),
+	'--content-disposition': (p4c1, None, None),
+	'': (p4e7,\
+		lambda a: a.split(),\
+		lambda b: ' '.join(b)),
 	'on_complete': (p4e8, None, None),
 }
 ShortLongOptions = {
@@ -2108,6 +2186,15 @@ ShortLongOptions = {
 	'-t': '--tries',
 	'-U': '--user-agent',
 }
+for wdg, dflt in (p1s2, 0), (p4s1, 1), (p4c1, True):
+	wdg.set_data('default-value', dflt)
+ParamDispatchers = {}
+for opt, (wdg, getter, putter) in ParamDispatcherExtends.iteritems():
+	pd = ParamDispatcher(wdg, optname=opt)
+	if getter: pd.set_getter(getter)
+	if putter: pd.set_putter(putter)
+	ParamDispatchers[opt] = pd
+
 
 # Pack new download window's widgets
 win_newdl.add(box_newdl)
@@ -2140,6 +2227,7 @@ page4.pack_start(p4e3, 0, 1)
 page4.pack_start(p4e4, 0, 1)
 page4.pack_start(p4e5, 0, 1)
 page4.pack_start(p4e6, 0, 1)
+page4.pack_start(p4c1, 0, 1)
 page4.pack_start(p4e7, 0, 1)
 page4.pack_start(p4e8, 0, 1)
 box_newdl.pack_start(btns_newdl, 0, 0)
@@ -2147,6 +2235,10 @@ btns_newdl.pack_start(btn_new_save, 0, 1)
 btns_newdl.pack_start(btn_new_open, 0, 1)
 btns_newdl.pack_start(btn_new_queue, 0, 1)
 btns_newdl.pack_start(btn_new_no, 0, 1)
+
+for label in p1l1, p2l1, p1l2a, p1l2b, p3l1, p4l1a, p4l1b:
+	label.set_alignment(0, 0)
+	label.set_padding(4, 5)
 
 
 
