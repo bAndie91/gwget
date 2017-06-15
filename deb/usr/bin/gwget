@@ -68,8 +68,15 @@ def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 		gtk.threads_enter()
 	text = None
 	if isinstance(e, OSError) or isinstance(e, IOError):
-		files = e.filename or '; '.join(e.filenames or [])
-		text = '%s%s%s (%d)%s%s' % (e.message, e.message and '\n', e.strerror, e.errno, files and '\n', files or '')
+		if hasattr(e, filename):
+			if e.filename:
+				files = e.filename
+			else:
+				files = '; '.join(e.filenames or [])
+			files = '\n' + files
+		else:
+			files = ''
+		text = '%s%s%s (%d)%s' % (e.message, e.message and '\n', e.strerror, e.errno, files)
 	elif isinstance(e, Exception):
 		text = e.message
 		if hasattr(e, 'errno'):
