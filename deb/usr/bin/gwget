@@ -68,7 +68,7 @@ def display_error(e, isPango=False, gtkErrorLevel=gtk.MESSAGE_ERROR):
 		gtk.threads_enter()
 	text = None
 	if isinstance(e, OSError) or isinstance(e, IOError):
-		if hasattr(e, filename):
+		if hasattr(e, 'filename'):
 			if e.filename:
 				files = e.filename
 			else:
@@ -796,7 +796,7 @@ class Download(BaseDownload):
 			try:
 				os.rename(self.logfile, savelogfile)
 			except OSError, e:
-				# treat this not a serious error
+				# Treat this not a serious error.
 				stderr(e.message + '\n')
 		
 		wget_args = ParamDispatcher.convert_to_wget_args(self.params)
@@ -1090,7 +1090,7 @@ def treeview_column0_edited(cellrenderer, itpathstr, newtext):
 		newpath = os.path.join(os.path.dirname(dl.outfile), newtext)
 		if rename_downloaded_file(dl, newpath):
 			dl.manually_renamed = True
-			if newtext.startswith(os.path.sep):
+			if os.path.isabs(newtext):
 				dl.params['rename_to'] = newpath
 			else:
 				dl.params['rename_to'] = relative_path(newpath, dl.params['--directory-prefix'])
@@ -1145,14 +1145,16 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 			cliURLs.append(arg)
 		idx += 1
 	
-	# Start downloads given in CLI
+	# Setup New Download panel with URL(s) and options given in CLI.
+	if not win_newdl.props.visible:
+		reset_parameters()
 	if cliURLs:
 		params = {}
 		for optnam, optval in cliOpts:
 			if ShortLongOptions.has_key(optnam):
 				optnam = ShortLongOptions[optnam]
 			if optnam == '--cookies':
-				# FIXME
+				# FIXME --cookies <=> --header
 				optval = ['Cookie: ' + optval]
 			elif optnam == '--cwd-prefix':
 				optval = cwd or os.getcwd()
@@ -1167,12 +1169,7 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 		new_urls = '\n'.join(cliURLs) + '\n'
 		if win_newdl.props.visible and append_url:
 			new_urls = old_urls + ('' if len(old_urls)==0 or old_urls[-1] == '\n' else '\n') + new_urls
-		if win_newdl.props.visible and len(old_urls.strip()):
-			# Don't reset parameter widgets as it's a subsequent gwget call,
-			# while New Download window is open and something typed in URLs field.
-			pass
-		else:
-			reset_parameters(params)
+		# TODO ha mar nyitva volt a panel akkor csak azt allitsa be ami nincs vagy amit a user nem irt felul
 		p1t1.set_text(new_urls)
 		show_win_newdl()
 
@@ -1349,7 +1346,7 @@ def setxattributes(dl):
 def on_completed_download(dl):
 	if os.path.exists(dl.outfile):
 		setxattributes(dl)
-		if not hasattr(dl, 'manually_renamed') or not dl.manually_renamed:
+		if not (hasattr(dl, 'manually_renamed') and dl.manually_renamed):
 			rename_to_filepath = None
 			warnfail = False
 			if dl.params.has_key('rename_to'):
@@ -1371,7 +1368,8 @@ def on_completed_download(dl):
 				# Otherwise strip URL query string from filename
 				rename_to_filepath = re.sub('\?[^?]+=[^?]*', '', dl.outfile)
 			if rename_to_filepath is not None:
-				rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail)
+				if rename_downloaded_file(dl, rename_to_filepath, warnfail=warnfail):
+					setxattributes(dl)
 				refresh_download_state(dl)
 	if dl.params.has_key('on_complete'):
 		s = dl.params['on_complete']
@@ -1400,7 +1398,7 @@ def rename_downloaded_file(dl, newpath, warnfail=True):
 							raise e
 					else:
 						if e.message: e.message += '\n'
-						e.message += _("Refuse to move an incompleted file across filesystems.")
+						e.message += _("Refused moving an incompleted file across filesystems.")
 						raise e
 				else:
 					raise e
@@ -1491,7 +1489,7 @@ def act_open_file(it, dl):
 		run_detached('mimeopen-gui', [dl.outfile])
 
 def act_open_folder(it, dl):
-	run_detached('mimeopen-gui', [dl.params['--directory-prefix']])
+	run_detached('mimeopen-gui', [os.path.dirname(dl.outfile)])
 
 def act_open_referer(it, dl):
 	run_detached('mimeopen-gui', [dl.params['--referer']])
@@ -1600,7 +1598,8 @@ def event_masked(event):
 def popup_context_menu(it, event, button=None, placement_func=None):
 	dl = DownLoadList[it][COL_DLOBJ]
 	ContextMenu.set_data('iterator', it)
-	cmi_open.set_sensitive(dl.outfile is not None)
+	cmi_open_file.set_sensitive(dl.outfile is not None)
+	cmi_open_referer.set_sensitive(dl.params.has_key('--referer'))
 	cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
 	cmi_refetch.set_sensitive(not dl.running)
 	cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
@@ -1739,9 +1738,15 @@ class ParamDispatcher(object):
 	def __init__(self, widget, optname):
 		self.widget = widget
 		self.optname = optname
-		self.optname_neg = '--no-' + optname[2:]
+		self.negative_optname = self.negate_optname(optname)
 		self.ext_getter = None
 		self.ext_setter = None
+	@staticmethod
+	def negate_optname(optname):
+		if optname.startswith('--no-'):
+			return '--' + optname[5:]
+		else:
+			return '--no-' + optname[2:]
 	@staticmethod
 	def convert_to_wget_args(params):
 		wget_args_all = []
@@ -1773,7 +1778,10 @@ class ParamDispatcher(object):
 			if optval not in [None, True]:
 				params[''] += [optval]
 	def cond_update_params_dict(self, params, optnam, optval):
-		if optnam not in [self.optname, self.optname_neg]:
+		if self.optname == '' and not ParamDispatchers.has_key(optnam) and not ParamDispatchers.has_key(self.negate_optname(optnam)):
+			self.update_unknown_param(params, optnam, optval)
+			return
+		if optnam not in [self.optname, self.negative_optname]:
 			return False
 		if self.optname in ParameterlessOptions and optval is None:
 			optval = (optnam == self.optname)
@@ -1787,8 +1795,8 @@ class ParamDispatcher(object):
 		else:
 			typ = type(val)
 			if typ == bool:
-				if val and params.has_key(self.optname_neg):
-					del params[self.optname_neg]
+				if val and params.has_key(self.negative_optname):
+					del params[self.negative_optname]
 				elif not val and params.has_key(self.optname):
 					del params[self.optname]
 			if typ in [float, int]:
@@ -1800,6 +1808,7 @@ class ParamDispatcher(object):
 				if type(params[self.optname]) != list:
 					params[self.optname] = [params[self.optname]]
 				params[self.optname] += val
+			# Disallow empty option parameters.
 			elif val != '':
 				params[self.optname] = val
 	def get_value(self):
@@ -1810,7 +1819,9 @@ class ParamDispatcher(object):
 			val = self.widget.get_value()
 		else:
 			val = self.widget.get_text()
-		if self.ext_getter:
+		if self.ext_getter is False:
+			val = None
+		elif self.ext_getter is not None:
 			# Filter value by extender function
 			sgn = inspect.getargspec(self.ext_getter)
 			if len(sgn.args) < 2 and sgn.varargs is None:
@@ -1823,6 +1834,7 @@ class ParamDispatcher(object):
 	def put_wget_args(self, args):
 		pass
 	def set_value(self, val):
+		#print "Setting", self, val
 		if val is None:
 			val = self.widget.get_data('default-value')
 		else:
@@ -1843,6 +1855,8 @@ class ParamDispatcher(object):
 			self.widget.set_text(str(val))
 	def set_putter(self, fnc):
 		self.ext_setter = fnc
+	def __repr__(self):
+		return '<ParamDispatcher %s=%s>' % (self.optname, repr(self.get_value()),)
 
 
 
@@ -2193,6 +2207,7 @@ GWgetOptionsParam = {
 	'--proxy-url': 'proxy',
 	'--cookies': '--header',
 	'--rename-to': 'rename_to',
+	'--output-document': 'rename_to',
 	'--run-on-complete': 'on_complete',
 	'--cwd-prefix': '--directory-prefix',
 }
