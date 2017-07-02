@@ -1,0 +1,7 @@
+#!/bin/bash
+
+echo "Args: $@" >&2
+sleep 1
+date
+sleep 1
+uname -a
