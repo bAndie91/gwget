@@ -1146,9 +1146,9 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 		idx += 1
 	
 	# Setup New Download panel with URL(s) and options given in CLI.
-	if not win_newdl.props.visible:
-		reset_parameters()
 	if cliURLs:
+		if not win_newdl.props.visible:
+			reset_parameters()
 		params = {}
 		for optnam, optval in cliOpts:
 			if ShortLongOptions.has_key(optnam):
@@ -1160,11 +1160,14 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 				optval = cwd or os.getcwd()
 			if GWgetOptionsParam.has_key(optnam):
 				optnam = GWgetOptionsParam[optnam]
-			# Generate dict for wget options according to returning type of each ParamDispatcher
+			
 			for prmdisp in ParamDispatchers.values():
+				# Refresh New Download panel's widgets.
 				prmdisp.cond_update_params_dict(params, optnam, optval)
+			
 		if params.has_key('--directory-prefix'):
 			prepend_uniq(LastFolders, params['--directory-prefix'])
+		
 		old_urls = p1t1.get_text()
 		new_urls = '\n'.join(cliURLs) + '\n'
 		if win_newdl.props.visible and append_url:
@@ -1443,10 +1446,10 @@ def reset_parameters(params={}):
 	for opt, prmdisp in ParamDispatchers.iteritems():
 		if params.has_key(opt):
 			# Fill widgets with given wget parameters.
-			prmdisp.set_value(params[opt])
+			prmdisp.set_value(params[opt], reset=True)
 		else:
 			# Reset widget to empty/default values.
-			prmdisp.set_value(None)
+			prmdisp.set_value(None, reset=True)
 
 def show_win_newdl():
 	win_newdl.show()
@@ -1783,6 +1786,22 @@ class ParamDispatcher(object):
 			return
 		if optnam not in [self.optname, self.negative_optname]:
 			return False
+		first_set_value = self.widget.get_data('first-setup')
+		if first_set_value:
+			# Do not overwrite if has been set.
+			return
+		else:
+			current_raw_val = self.get_raw_value()
+			if first_set_value is None:
+				default_val = self.widget.get_data('default-value')
+				if default_val is not None and current_raw_val != default_val:
+					# Do not overwrite if edited by user.
+					return
+			elif first_set_value == '':
+				# Do not overwrite if edited by user.
+				if current_raw_val != '':
+					return
+		
 		if self.optname in ParameterlessOptions and optval is None:
 			optval = (optnam == self.optname)
 		self.set_value(optval)
@@ -1811,14 +1830,17 @@ class ParamDispatcher(object):
 			# Disallow empty option parameters.
 			elif val != '':
 				params[self.optname] = val
-	def get_value(self):
-		# Get value by method proper to widget type
+	def get_raw_value(self):
 		if isinstance(self.widget, gtk.CheckButton):
 			val = self.widget.get_active()
 		elif isinstance(self.widget, gtk.SpinButton):
 			val = self.widget.get_value()
 		else:
 			val = self.widget.get_text()
+		return val
+	def get_value(self):
+		# Get value by method proper to widget type
+		val = self.get_raw_value()
 		if self.ext_getter is False:
 			val = None
 		elif self.ext_getter is not None:
@@ -1833,8 +1855,8 @@ class ParamDispatcher(object):
 		self.ext_getter = fnc
 	def put_wget_args(self, args):
 		pass
-	def set_value(self, val):
-		#print "Setting", self, val
+	def set_value(self, val, reset=False):
+		self.widget.set_data('first-setup', val)
 		if val is None:
 			val = self.widget.get_data('default-value')
 		else:
