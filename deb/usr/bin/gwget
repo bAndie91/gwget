@@ -364,9 +364,8 @@ class StockButton(gtk.Button):
 			img.set_from_pixbuf(icon)
 			img.props.visible = True
 
-class StockToolButton(gtk.ToolButton):
+class BaseStockButton(gtk.ToolItem):
 	def __init__(self, label=None, stock=None, tooltip=None):
-		super(self.__class__, self).__init__()
 		if stock is not None:
 			if stock in gtk.stock_list_ids():
 				if stock is not None: self.set_stock_id(stock)
@@ -389,6 +388,26 @@ class StockToolButton(gtk.ToolButton):
 	def set_markup(self, markup):
 		x, lbl = self.__get_children()
 		lbl.set_markup(markup)
+
+class StockToolButton(gtk.ToolButton, BaseStockButton):
+	def __init__(self, **kv):
+		super(StockToolButton, self).__init__(gtk.STOCK_MISSING_IMAGE)
+		BaseStockButton.__init__(self, **kv)
+
+class StockMenuToolButton(gtk.MenuToolButton, BaseStockButton):
+	def __init__(self, **kv):
+		super(StockMenuToolButton, self).__init__(gtk.STOCK_MISSING_IMAGE)
+		BaseStockButton.__init__(self, **kv)
+
+class StockMenuItem(gtk.ImageMenuItem):
+	def __init__(self, label=None, stock_id=None, accel_group=None, callback=None):
+		gtk.ImageMenuItem.__init__(self, stock_id, accel_group)
+		if stock_id not in gtk.stock_list_ids():
+			SetAnyIcon(stock_id, self)
+		if label is not None:
+			self.set_label(label)
+		if callback is not None:
+			self.connect('activate', callback)
 
 def SetAnyIcon(name, widget):
 	size = gtk.ICON_SIZE_MENU
@@ -424,14 +443,6 @@ def SetAnyIcon(name, widget):
 			except:
 				pass
 	widget.set_image(img)
-
-class StockMenuItem(gtk.ImageMenuItem):
-	def __init__(self, label=None, stock_id=None, accel_group=None):
-		gtk.ImageMenuItem.__init__(self, stock_id, accel_group)
-		if stock_id not in gtk.stock_list_ids():
-			SetAnyIcon(stock_id, self)
-		if label is not None:
-			self.set_label(label)
 
 def load_toolitems(toolbar, toolitems):
 	items = []
@@ -1564,7 +1575,7 @@ def simple_load_file_into_scrolledtextview(filepath, textview):
 		display_error(e)
 
 def act_props(it, dl):
-	#print dl.__dict__
+	#stderr(str(dl.__dict__)+'\n')
 	show_win_newdl()
 	reset_parameters(dl.params)
 	p1t1.set_text(dl.original_url or '')
@@ -1978,21 +1989,27 @@ add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
 
 toolbuttons = [
 	(None, gtk.STOCK_NEW, None, act_new),
-	(_("Resume All"), gtk.STOCK_MEDIA_PLAY, None, act_start_all),
-	(_("Pause All"), gtk.STOCK_MEDIA_PAUSE, None, act_pause_all),
-	(_("Clear Completed"), gtk.STOCK_CLEAR, None, act_clear_completed),
 	(None, None, None, 'separator'),
 	(_("Resume"), gtk.STOCK_MEDIA_PLAY, None, (act_on_selection, act_start)),
 	(_("Pause"), gtk.STOCK_MEDIA_PAUSE, None, (act_on_selection, act_pause)),
 	(_("Delete File"), gtk.STOCK_DELETE, None, (act_on_selection, act_remove_download)),
 	(_("Clear"), gtk.STOCK_CLEAR, None, (act_on_selection, act_clear_download)),
 	(None, gtk.STOCK_PROPERTIES, None, (act_on_selection, act_props)),
+	(None, None, None, 'separator'),
+	(_("Clear Completed"), gtk.STOCK_CLEAR, None, act_clear_completed),
+	(None, StockMenuToolButton(label=_("All"), stock=gtk.STOCK_SELECT_ALL), None, None),
 	(None, None, None, 'space'),
 	(None, gtk.STOCK_PREFERENCES, None, act_options),
 	(None, gtk.STOCK_QUIT, None, act_quit),
 ]
-x, x, x, x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, x \
+x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, btn_all, x_, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
+
+mnu_all = gtk.Menu()
+mnu_all.append(StockMenuItem(stock_id=gtk.STOCK_MEDIA_PLAY, label=_("Resume All"), callback=lambda x: on_click_button(x, act_start_all)))
+mnu_all.append(StockMenuItem(stock_id=gtk.STOCK_MEDIA_PAUSE, label=_("Pause All"), callback=lambda x: on_click_button(x, act_pause_all)))
+mnu_all.show_all()
+btn_all.set_menu(mnu_all)
 on_selection_change(main_selection)
 
 
@@ -2196,7 +2213,7 @@ ParamDispatcherExtends = {
 		lambda a, w: a if w.get_visible() else None,\
 		None),
 	'--limit-rate': (p1s2,\
-		lambda a: "%dk" % (a,),\
+		lambda a: '%dk' % (a,),\
 		lambda b: convert_to_bytes(b, 'k')),
 	'--load-cookies': (p2c1, None, None),
 	'--header': (p2t1,\
