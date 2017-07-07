@@ -96,10 +96,6 @@ msgstr "Mindet elindít"
 msgid "Pause All"
 msgstr "Mindet megállít"
 
-# file: gwget, line: 1201
-msgid "Clear Completed"
-msgstr "Készek elfelejtése"
-
 # file: gwget, line: 1217
 msgid "Filename"
 msgstr "Fájlnév"
@@ -263,3 +259,27 @@ msgstr "Content-Disposition fájlnév"
 # file: gwget, line: 2138
 msgid "wget parses Content-Disposition header for filename"
 msgstr "a wget dolgozza fel a Content-Disposition fejlécet a fájlnév megállapítása végett"
+
+msgid "All…"
+msgstr "Mind…"
+
+# file: gwget, line: 1169
+msgid "Path is given by `--output-document´ but `--directory-prefix´ is also given."
+msgstr "Útvonalat adtál meg `--output-document´-tel de `--directory-prefix´-et is adtál."
+
+# file: gwget, line: 1170
+msgid "Using basename of `--output-document´."
+msgstr "Csak a fájlnevet veszem az `--output-document´-ből."
+
+# file: gwget, line: 1174
+msgid "Consider gwget option `--rename-to´ instead of `--output-document´ next time."
+msgstr "Megfontolandó az `--output-document´ helyett a `--rename-to´ gwget kapcsoló."
+
+# file: gwget, line: 1509
+msgid "Options"
+msgstr "Beállítás"
+
+# file: gwget, line: 2028
+msgid "Select Completed"
+msgstr "Készeket kijelöl"
+

@@ -364,7 +364,7 @@ class StockButton(gtk.Button):
 			img.set_from_pixbuf(icon)
 			img.props.visible = True
 
-class BaseStockButton(gtk.ToolItem):
+class BaseStockToolButton(gtk.ToolItem):
 	def __init__(self, label=None, stock=None, tooltip=None):
 		if stock is not None:
 			if stock in gtk.stock_list_ids():
@@ -381,23 +381,16 @@ class BaseStockButton(gtk.ToolItem):
 		img, a = a.get_children()
 		img.set_from_pixbuf(pxb)
 		img.props.visible = True
-	def __get_children(self):
-		align = self.get_children()[0]
-		hbox = align.get_children()[0]
-		return hbox.get_children()
-	def set_markup(self, markup):
-		x, lbl = self.__get_children()
-		lbl.set_markup(markup)
 
-class StockToolButton(gtk.ToolButton, BaseStockButton):
+class StockToolButton(gtk.ToolButton, BaseStockToolButton):
 	def __init__(self, **kv):
 		super(StockToolButton, self).__init__(gtk.STOCK_MISSING_IMAGE)
-		BaseStockButton.__init__(self, **kv)
+		BaseStockToolButton.__init__(self, **kv)
 
-class StockMenuToolButton(gtk.MenuToolButton, BaseStockButton):
+class StockMenuToolButton(gtk.MenuToolButton, BaseStockToolButton):
 	def __init__(self, **kv):
 		super(StockMenuToolButton, self).__init__(gtk.STOCK_MISSING_IMAGE)
-		BaseStockButton.__init__(self, **kv)
+		BaseStockToolButton.__init__(self, **kv)
 
 class StockMenuItem(gtk.ImageMenuItem):
 	def __init__(self, label=None, stock_id=None, accel_group=None, callback=None):
@@ -448,6 +441,7 @@ def load_toolitems(toolbar, toolitems):
 	items = []
 	for label, stock, tip, fnc_left in toolitems:
 		hid = None
+		Lstocklabel = None
 		if type(fnc_left) == str:
 			tbi = gtk.SeparatorToolItem()
 			if fnc_left == 'space':
@@ -458,30 +452,30 @@ def load_toolitems(toolbar, toolitems):
 				tbi.set_expand(False)
 		elif isinstance(stock, gtk.ToolItem):
 			tbi = stock
-			if tip is not None:
-				tbi.set_tooltip_text(_(tip))
-			hid = tbi.connect('clicked', on_click_button, fnc_left)
 		else:
-			Lstocklabel = None
+			tbi = StockToolButton(stock=stock)
 			st = gtk.stock_lookup(stock)
-			if st:
-				Lstocklabel = re.sub('_', '', st[1])
+			if st: Lstocklabel = re.sub('_', '', st[1])
+		
+		if label is not None:
+			Llabel = _(label)
+		else:
+			Llabel = Lstocklabel
+		if tip is not None:
+			Ltip = _(tip)
+		else:
 			if label is not None:
-				Llabel = _(label)
+				Ltip = Llabel
 			else:
-				Llabel = Lstocklabel
-			if tip is not None:
-				Ltip = _(tip)
-			else:
-				if label is not None:
-					Ltip = Llabel
-				else:
-					Ltip = Lstocklabel
-			tbi = StockToolButton(label=Llabel, stock=stock, tooltip=Ltip)
-			tbi.set_data('stock', stock)
-			tbi.set_data('label', label)
+				Ltip = Lstocklabel
+		
+		if Llabel is not None:
+			tbi.set_label(Llabel)
+		if Ltip is not None:
+			tbi.set_tooltip_text(Ltip)
+		if callable(fnc_left) or type(fnc_left) is tuple:
 			hid = tbi.connect('clicked', on_click_button, fnc_left)
-		tbi.set_data('clicked-handler', hid)
+			tbi.set_data('clicked-handler', hid)
 		toolbar.insert(tbi, -1)
 		items.append(tbi)
 	return items
@@ -588,18 +582,21 @@ def run_synchronous(cmd, args):
 	#print cmd.__dict__
 	return cmd
 
-def run_detached(cmd, args):
+def run_detached(cmd, args, workdir=None):
 	args = args[:]
 	args.insert(0, os.path.basename(cmd))
 	pid1 = os.fork()
 	if pid1 == 0:
-		os.closerange(0, OSMaxFiles)
+		os.closerange(0, 1)
+		os.closerange(3, OSMaxFiles)
 		pid2 = os.fork()
 		if pid2 == 0:
 			try:
+				if workdir is not None:
+					os.chdir(workdir)
 				os.execvp(cmd, args)
-			except OSError:
-				pass
+			except OSError as e:
+				sys.stderr.write(e.message + '\n')
 			os._exit(127)
 		else:
 			os._exit(0)
@@ -792,7 +789,7 @@ class Download(BaseDownload):
 			sys.stdin.close()
 			os.closerange(3, OSMaxFiles)
 			try: os.execvp('wget', ['wget'] + args)
-			except OSError as e: print e.message
+			except OSError as e: stderr(e.message + '\n')
 			os._exit(127)
 		os.close(writer)
 		return os.fdopen(reader, 'r')
@@ -1112,7 +1109,6 @@ def treeview_column0_edit_canceled(cellrenderer):
 
 def win_main_show():
 	# Manage GUI
-	btn_remove.hide()
 	
 	# Load cached downloads from object dumps
 	import_downloads()
@@ -1157,34 +1153,44 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 		idx += 1
 	
 	# Setup New Download panel with URL(s) and options given in CLI.
-	if cliURLs:
-		if not win_newdl.props.visible:
-			reset_parameters()
-		params = {}
-		for optnam, optval in cliOpts:
-			if ShortLongOptions.has_key(optnam):
-				optnam = ShortLongOptions[optnam]
-			if optnam == '--cookies':
-				# FIXME --cookies <=> --header
-				optval = ['Cookie: ' + optval]
-			elif optnam == '--cwd-prefix':
-				optval = cwd or os.getcwd()
-			if GWgetOptionsParam.has_key(optnam):
-				optnam = GWgetOptionsParam[optnam]
+	subsequent = win_newdl.props.visible
+	if not subsequent:
+		reset_parameters()
+	params = {}
+	for optnam, optval in cliOpts:
+		if ShortLongOptions.has_key(optnam):
+			optnam = ShortLongOptions[optnam]
 			
-			for prmdisp in ParamDispatchers.values():
-				# Refresh New Download panel's widgets.
-				prmdisp.cond_update_params_dict(params, optnam, optval)
-			
-		if params.has_key('--directory-prefix'):
-			prepend_uniq(LastFolders, params['--directory-prefix'])
+		if optnam == '--cwd-prefix':
+			optval = cwd or os.getcwd()
+		elif optnam == '--output-document':
+			if optval.find(os.path.sep) > -1:
+				if any(x[0] == '--directory-prefix' for x in cliOpts):
+					stderr(_("Path is given by `--output-document´ but `--directory-prefix´ is also given.")+'\n')
+					stderr(_("Using basename of `--output-document´.")+'\n')
+				else:
+					cliOpts.append(('--directory-prefix', os.path.dirname(optval)))
+				optval = os.path.basename(optval)
+				stderr(_("Consider gwget option `--rename-to´ instead of `--output-document´ next time.")+'\n')
+			# TODO process --rename-to after --output-document
+		if GWgetOptionsParam.has_key(optnam):
+			optnam = GWgetOptionsParam[optnam]
 		
+		for prmdisp in ParamDispatchers.values():
+			# Refresh New Download panel's widgets.
+			prmdisp.cond_update_params_dict(params, optnam, optval, force = not subsequent)
+	
+	if params.has_key('--directory-prefix'):
+		prepend_uniq(LastFolders, params['--directory-prefix'])
+	
+	if cliURLs:
 		old_urls = p1t1.get_text()
 		new_urls = '\n'.join(cliURLs) + '\n'
-		if win_newdl.props.visible and append_url:
+		if subsequent and append_url:
 			new_urls = old_urls + ('' if len(old_urls)==0 or old_urls[-1] == '\n' else '\n') + new_urls
-		# TODO ha mar nyitva volt a panel akkor csak azt allitsa be ami nincs vagy amit a user nem irt felul
 		p1t1.set_text(new_urls)
+	
+	if cliOpts or cliURLs:
 		show_win_newdl()
 
 def act_quit():
@@ -1390,7 +1396,11 @@ def on_completed_download(dl):
 		SQ = '\''
 		esc_filename = SQ + dl.outfile.replace(SQ, SQ+'\\'+SQ+SQ) + SQ
 		shcmd = s.replace('{}', esc_filename)
-		run_detached('sh', ['-c', shcmd])
+		try:
+			workdir = dl.params['--directory-prefix']
+		except KeyError:
+			workdir = None
+		run_detached('sh', ['-c', shcmd], workdir)
 
 def rename_downloaded_file(dl, newpath, warnfail=True):
 	if dl.outfile == newpath:
@@ -1489,13 +1499,22 @@ def act_pause_all():
 		elif dl['status'] == S_QUEUE:
 			dl.params['runnable'] = False
 
-def act_clear_completed():
+def act_select_completed():
 	for it, dl in iter_downloadlist():
 		if dl.completed:
-			act_clear_download(it, dl)
+			main_selection.select_iter(it)
 
 def act_options():
-	pass
+	win_opts = gtk.Window()
+	win_opts.set_title(_("Options"))
+	win_opts.set_icon_name('emblem-downloads')
+	win_opts.connect('delete-event', lambda w,e: w.destroy())
+	add_key_binding(win_opts, 'Escape', lambda a,b,c,d: win_opts.destroy() or True)
+	win_opts.set_transient_for(win_main)
+	win_opts.set_modal(True)
+	vbox = gtk.VBox()
+	win_opts.add(vbox)
+	win_opts.show_all()
 
 
 def act_open_file(it, dl):
@@ -1596,7 +1615,6 @@ def on_selection_change(selection):
 	num = len(iters)
 	btn_resume.set_sensitive(num>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
 	btn_pause.set_sensitive(num>0 and all(dl.running for dl in dls))
-	btn_remove.set_sensitive(num>0 and all(dl.outfile is not None and not dl.running for dl in dls))
 	btn_clear.set_sensitive(num>0 and all(not dl.running for dl in dls))
 	btn_props.set_sensitive(num == 1)
 
@@ -1757,10 +1775,13 @@ class ParamDispatcher(object):
 		self.ext_setter = None
 	@staticmethod
 	def negate_optname(optname):
-		if optname.startswith('--no-'):
-			return '--' + optname[5:]
+		if optname.startswith('--'):
+			if optname.startswith('--no-'):
+				return '--' + optname[5:]
+			else:
+				return '--no-' + optname[2:]
 		else:
-			return '--no-' + optname[2:]
+			return None
 	@staticmethod
 	def convert_to_wget_args(params):
 		wget_args_all = []
@@ -1780,38 +1801,48 @@ class ParamDispatcher(object):
 				# append custom options
 				for v1 in v:
 					wget_args_all.append(v1)
+			# TODO iterate through not on params but on ParamDispatchers
+			elif k == 'header_cookies':
+				wget_args_all.append('--header')
+				wget_args_all.append('Cookie: ' + v)
 		return wget_args_all
 	@staticmethod
 	def update_unknown_param(params, option, optval=None):
 		if not params.has_key(''):
 			params[''] = []
 		if optval is False:
-			params[''] += ['--no-' + option[2:]]
+			appendix = ['--no-' + option[2:]]
 		else:
-			params[''] += [option]
+			appendix = [option]
 			if optval not in [None, True]:
-				params[''] += [optval]
-	def cond_update_params_dict(self, params, optnam, optval):
+				appendix += [optval]
+		params[''] += appendix
+		return appendix
+	def cond_update_params_dict(self, params, optnam, optval, force=False):
 		if self.optname == '' and not ParamDispatchers.has_key(optnam) and not ParamDispatchers.has_key(self.negate_optname(optnam)):
-			self.update_unknown_param(params, optnam, optval)
+			new_args = self.update_unknown_param(params, optnam, optval)
+			# Append to other wget options field.
+			self.set_value(self.get_value() + new_args)
 			return
 		if optnam not in [self.optname, self.negative_optname]:
 			return False
-		first_set_value = self.widget.get_data('first-setup')
-		if first_set_value:
-			# Do not overwrite if has been set.
-			return
-		else:
-			current_raw_val = self.get_raw_value()
-			if first_set_value is None:
-				default_val = self.widget.get_data('default-value')
-				if default_val is not None and current_raw_val != default_val:
+		
+		if not force:
+			first_set_value = self.widget.get_data('initial')
+			if first_set_value:
+				# Do not overwrite if has been set.
+				return
+			else:
+				current_raw_val = self.get_raw_value()
+				if first_set_value is None:
+					default_val = self.widget.get_data('default-value')
+					if default_val is not None and current_raw_val != default_val:
+						# Do not overwrite if edited by user.
+						return
+				elif first_set_value == '':
 					# Do not overwrite if edited by user.
-					return
-			elif first_set_value == '':
-				# Do not overwrite if edited by user.
-				if current_raw_val != '':
-					return
+					if current_raw_val != '':
+						return
 		
 		if self.optname in ParameterlessOptions and optval is None:
 			optval = (optnam == self.optname)
@@ -1864,10 +1895,8 @@ class ParamDispatcher(object):
 		return val
 	def set_getter(self, fnc):
 		self.ext_getter = fnc
-	def put_wget_args(self, args):
-		pass
 	def set_value(self, val, reset=False):
-		self.widget.set_data('first-setup', val)
+		self.widget.set_data('initial', val)
 		if val is None:
 			val = self.widget.get_data('default-value')
 		else:
@@ -1884,6 +1913,11 @@ class ParamDispatcher(object):
 			if val is None: val = 0
 			self.widget.set_value(int(val))
 		else:
+			if isinstance(self.widget, ScrolledTextView):
+				# Append option value to TextView text.
+				if val is not None:
+					cur = self.widget.get_text()
+					val = cur + ('' if cur=='' or cur[-1] == '\n' else '\n') + val
 			if val is None: val = ''
 			self.widget.set_text(str(val))
 	def set_putter(self, fnc):
@@ -1992,17 +2026,15 @@ toolbuttons = [
 	(None, None, None, 'separator'),
 	(_("Resume"), gtk.STOCK_MEDIA_PLAY, None, (act_on_selection, act_start)),
 	(_("Pause"), gtk.STOCK_MEDIA_PAUSE, None, (act_on_selection, act_pause)),
-	(_("Delete File"), gtk.STOCK_DELETE, None, (act_on_selection, act_remove_download)),
 	(_("Clear"), gtk.STOCK_CLEAR, None, (act_on_selection, act_clear_download)),
 	(None, gtk.STOCK_PROPERTIES, None, (act_on_selection, act_props)),
 	(None, None, None, 'separator'),
-	(_("Clear Completed"), gtk.STOCK_CLEAR, None, act_clear_completed),
-	(None, StockMenuToolButton(label=_("All"), stock=gtk.STOCK_SELECT_ALL), None, None),
+	(_("Select Completed"), StockMenuToolButton(stock=gtk.STOCK_SELECT_ALL), None, act_select_completed),
 	(None, None, None, 'space'),
 	(None, gtk.STOCK_PREFERENCES, None, act_options),
 	(None, gtk.STOCK_QUIT, None, act_quit),
 ]
-x, x_, btn_resume, btn_pause, btn_remove, btn_clear, btn_props, x_, x, btn_all, x_, x, x \
+x, x_, btn_resume, btn_pause, btn_clear, btn_props, x_, btn_all, x__, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
 
 mnu_all = gtk.Menu()
@@ -2216,10 +2248,9 @@ ParamDispatcherExtends = {
 		lambda a: '%dk' % (a,),\
 		lambda b: convert_to_bytes(b, 'k')),
 	'--load-cookies': (p2c1, None, None),
-	'--header': (p2t1,\
-		# FIXME: non-Cookie headers
-		lambda a: ['Cookie: ' + '; '.join(filter(lambda k: len(k), a.split('\n')))] if len(a.strip()) else None,\
-		lambda b: '\n'.join(k.strip() for k in ';'.join(re.sub('^Cookie:\s+', '', h) for h in filter(lambda h: re.search('^Cookie: ', h), b)).split(';'))+'\n'),
+	'header_cookies': (p2t1,\
+		lambda a: '; '.join(filter(lambda k: len(k), a.split('\n'))) if len(a.strip()) else None,\
+		lambda b: '\n'.join(k.strip() for k in b.split(';'))+'\n'),
 	'--post-data': (p3t1,\
 		lambda a: urllib.urlencode(dict(map(lambda p: (p if p.find('=')>-1 else p+'=').split('=', 1), filter(lambda p: len(p), a.split('\n'))))),\
 		lambda b: '\n'.join(urllib.unquote(p) for p in b.split('&'))+'\n'),
@@ -2244,7 +2275,7 @@ ShortLongOptions = {
 # Map gwget cli options to ParamDispatcher keys.
 GWgetOptionsParam = {
 	'--proxy-url': 'proxy',
-	'--cookies': '--header',
+	'--cookies': 'header_cookies',
 	'--rename-to': 'rename_to',
 	'--output-document': 'rename_to',
 	'--run-on-complete': 'on_complete',
