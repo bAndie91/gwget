@@ -1152,6 +1152,15 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 			cliURLs.append(arg)
 		idx += 1
 	
+	# Sort --rename-to behind of --output-document to take precedence over it.
+	idx = 0
+	while idx < len(cliOpts):
+		if cliOpts[idx][0] == '--rename-to':
+			if any(x[0] != '--rename-to' for x in cliOpts[idx:]):
+				cliOpts = cliOpts[:idx] + cliOpts[idx+1:] + cliOpts[idx:idx+1]
+				idx -= 1
+		idx += 1
+	
 	# Setup New Download panel with URL(s) and options given in CLI.
 	subsequent = win_newdl.props.visible
 	if not subsequent:
@@ -1172,7 +1181,6 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 					cliOpts.append(('--directory-prefix', os.path.dirname(optval)))
 				optval = os.path.basename(optval)
 				stderr(_("Consider gwget option `--rename-to´ instead of `--output-document´ next time.")+'\n')
-			# TODO process --rename-to after --output-document
 		if GWgetOptionsParam.has_key(optnam):
 			optnam = GWgetOptionsParam[optnam]
 		
@@ -2120,7 +2128,6 @@ main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
-#main_list.set_search_position_func() #TODO
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
 main_list.drag_dest_set(0, [], 0)
