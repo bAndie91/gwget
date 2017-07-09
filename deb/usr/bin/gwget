@@ -766,7 +766,7 @@ class Folder(BaseTreeItem):
 		self.row[COL_NAMEEDITABLE] = True
 	def rename(self, newname):
 		self.name = newname
-		self.row[COL_NAME] = newname  # TODO segfault on reordered row
+		self.row[COL_NAME] = newname  # TODO segfault on reordered (DnD'ed) row
 
 class BaseDownload(BaseTreeItem):
 	def __init__(self, url, params={}):
@@ -1130,7 +1130,7 @@ def lock_row_refresh(doLock):
 		refresh_download_state(row[COL_DLOBJ])
 
 def treeview_column0_editing(cellrenderer, editable, rownum):
-	row = DownLoadList[tuple(map(int, rownum.split(':')))]
+	row = DownLoadList[DownLoadList.get_iter_from_string(rownum)]
 	main_list.set_data('editing-row', row)
 	dl = row[COL_DLOBJ]
 	if isinstance(dl, BaseDownload):
@@ -1305,6 +1305,7 @@ def export_downloads():
 		pickle.dump(dl, fh)
 		fh.close()
 	DownLoadList.foreach(each)
+	# TODO save expanded/collapsed state
 
 class iter_downloadtree(object):
 	def __init__(self, onlyclass=None):
@@ -1534,9 +1535,9 @@ def rename_downloaded_file(dl, newpath, warnfail=True):
 	return False
 
 def DownLoadList_append_new(dldict, parent=None):
-	return DownLoadList_add_new(dldict, parent=parent, prepend=False)
+	return DownLoadList_add_new(dldict, parent=parent)
 
-def DownLoadList_add_new(dldict, parent=None, prepend=False):
+def DownLoadList_add_new(dldict, parent=None):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
 	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
 	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE
@@ -1549,20 +1550,15 @@ def DownLoadList_add_new(dldict, parent=None, prepend=False):
 	row = [None, '', '', None, 0, '', '', 0, 0, -1, '', -1, '', '', '', '', False]
 	for idx, val in dldict.iteritems():
 		row[idx] = val
-	if prepend:
-		newiter = DownLoadList.prepend(parent, row)
-	else:
-		newiter = DownLoadList.append(parent, row)
+	newiter = DownLoadList.append(parent, row)
 	row[COL_DLOBJ].row = DownLoadList[newiter]
 	row[COL_DLOBJ].materialized()
 	return newiter
 
 def DownLoadList_add_new_folder(parent=None):
-	# TODO add to selected folder
 	return DownLoadList_add_new(
 		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True,},
-		parent = parent,
-		prepend = True)
+		parent = parent)
 
 def start_new_download(url, params, start=True):
 	urlparts = urlparse.urlparse(url)
@@ -1602,7 +1598,14 @@ def act_new():
 	reset_parameters()
 
 def act_new_folder():
-	DownLoadList_add_new_folder()
+	parent = None
+	itpaths = main_selection.get_selected_rows()[1]
+	if len(itpaths) > 0:
+		parent = DownLoadList.get_iter(itpaths[0])
+		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
+			parent = DownLoadList.iter_parent(parent)
+	DownLoadList_add_new_folder(parent=parent)
+	# TODO expand, focus, select
 
 def act_start_all():
 	for it, dl in iter_downloadtree(BaseDownload):
@@ -1672,17 +1675,35 @@ def act_remove_download(it, dl, force=False):
 		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
+def DownLoadList_move(iterator, target):
+	d = dict(zip(range(len(DownLoadList[iterator])), DownLoadList[iterator]))
+	moved_it = DownLoadList_append_new(d, parent=target)
+	while DownLoadList.iter_has_child(iterator):
+		DownLoadList_move(DownLoadList.iter_children(iterator), moved_it)
+	del DownLoadList[iterator]
+	return moved_it
+
 def act_clear_download(it, dl):
-	if not dl.running:
-		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
-			try:
-				if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
-					act_remove_download(it, dl, force=True)
-			except DialogCancel:
-				return
-		if dl.logfile is not None:
-			untrack_download_file(dl)
+	if isinstance(dl, Folder):
+		main_selection.unselect_all()
+		parent = DownLoadList.iter_parent(it)
+		# Move all children to one level up.
+		while DownLoadList.iter_has_child(it):
+			moved_it = DownLoadList_move(DownLoadList.iter_children(it), parent)
+			main_selection.select_iter(moved_it)
 		del DownLoadList[it]
+		delete(dl.get_dumpfile())
+	else:
+		if not dl.running:
+			if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
+				try:
+					if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
+						act_remove_download(it, dl, force=True)
+				except DialogCancel:
+					return
+			if dl.logfile is not None:
+				untrack_download_file(dl)
+			del DownLoadList[it]
 
 def untrack_download_file(dl):
 	delete(dl.get_dumpfile())
@@ -2264,6 +2285,7 @@ main_list.set_search_column(COL_NAME)
 #main_list.connect('drag-motion', DnD_motion)
 #main_list.connect('drag-drop', DnD_accept)
 #main_list.connect('drag-data-received', DnD_receive)
+# TODO multi DnD
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
 cmi_open_file.connect('activate', on_context_menu, act_open_file)
