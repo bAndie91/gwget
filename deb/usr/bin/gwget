@@ -1294,18 +1294,22 @@ def import_downloads():
 			for obj in items:
 				DownLoadList_append_new({COL_DLOBJ: obj})
 			break
+	def expander(model, path, it):
+		if hasattr(model[it][COL_DLOBJ], 'expanded') and bool(model[it][COL_DLOBJ].expanded):
+			main_list.expand_row(path, open_all=False)
+	DownLoadList.foreach(expander)
 	refresh_download_state_all()
 
 def export_downloads():
 	def each(model, path, it):
 		dl = model[it][COL_DLOBJ]
+		dl.expanded = main_list.row_expanded(path)
 		dl.pathid = path
 		dl.morior()
 		fh = open(dl.get_dumpfile(), 'w')
 		pickle.dump(dl, fh)
 		fh.close()
 	DownLoadList.foreach(each)
-	# TODO save expanded/collapsed state
 
 class iter_downloadtree(object):
 	def __init__(self, onlyclass=None):
@@ -1604,8 +1608,12 @@ def act_new_folder():
 		parent = DownLoadList.get_iter(itpaths[0])
 		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
 			parent = DownLoadList.iter_parent(parent)
-	DownLoadList_add_new_folder(parent=parent)
-	# TODO expand, focus, select
+	it = DownLoadList_add_new_folder(parent=parent)
+	itpath = DownLoadList.get_path(it)
+	main_list.expand_to_path(itpath)
+	main_selection.unselect_all()
+	main_selection.select_iter(it)
+	main_list.set_cursor(itpath, tvc0)
 
 def act_start_all():
 	for it, dl in iter_downloadtree(BaseDownload):
@@ -1754,6 +1762,7 @@ def act_on_selection(func, maxi=None):
 		iters.append(DownLoadList.get_iter(itpath))
 	if maxi is None or len(iters) <= maxi:
 		for it in iters:
+			# TODO check if iterator deleted in meanwhile
 			func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
@@ -1816,7 +1825,6 @@ def on_treeview_key(tree, event):
 	if event_masked(event):
 		return False
 	if event.keyval == gtk.gdk.keyval_from_name('Delete'):
-		# TODO del Folder / contents
 		act_on_selection(act_clear_download)
 		return True
 	rows = main_selection.get_selected_rows()[1]
