@@ -1603,17 +1603,20 @@ def act_new():
 
 def act_new_folder():
 	parent = None
+	after = None
 	itpaths = main_selection.get_selected_rows()[1]
 	if len(itpaths) > 0:
 		parent = DownLoadList.get_iter(itpaths[0])
 		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
+			after = parent
 			parent = DownLoadList.iter_parent(parent)
 	it = DownLoadList_add_new_folder(parent=parent)
+	DownLoadList.move_after(it, after)
 	itpath = DownLoadList.get_path(it)
 	main_list.expand_to_path(itpath)
 	main_selection.unselect_all()
 	main_selection.select_iter(it)
-	main_list.set_cursor(itpath, tvc0)
+	main_list.set_cursor(itpath, focus_column=tvc0, start_editing=True)
 
 def act_start_all():
 	for it, dl in iter_downloadtree(BaseDownload):
@@ -1683,22 +1686,26 @@ def act_remove_download(it, dl, force=False):
 		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
-def DownLoadList_move(iterator, target):
+def DownLoadList_move(iterator, parent=None, sibling=None):
 	d = dict(zip(range(len(DownLoadList[iterator])), DownLoadList[iterator]))
-	moved_it = DownLoadList_append_new(d, parent=target)
+	moved_it = DownLoadList_append_new(d, parent=parent)
+	DownLoadList.move_after(moved_it, sibling)
+	child_moved_it = None
 	while DownLoadList.iter_has_child(iterator):
-		DownLoadList_move(DownLoadList.iter_children(iterator), moved_it)
+		child_moved_it = DownLoadList_move(DownLoadList.iter_children(iterator), moved_it, child_moved_it)
 	del DownLoadList[iterator]
 	return moved_it
 
 def act_clear_download(it, dl):
 	if isinstance(dl, Folder):
 		main_selection.unselect_all()
-		parent = DownLoadList.iter_parent(it)
 		# Move all children to one level up.
+		parent = DownLoadList.iter_parent(it)
+		sibling = it
 		while DownLoadList.iter_has_child(it):
-			moved_it = DownLoadList_move(DownLoadList.iter_children(it), parent)
+			moved_it = DownLoadList_move(DownLoadList.iter_children(it), parent, sibling)
 			main_selection.select_iter(moved_it)
+			sibling = moved_it
 		del DownLoadList[it]
 		delete(dl.get_dumpfile())
 	else:
@@ -1758,11 +1765,10 @@ def act_props(it, dl):
 
 def act_on_selection(func, maxi=None):
 	iters = []
-	for itpath in main_selection.get_selected_rows()[1]:
+	for itpath in sorted(main_selection.get_selected_rows()[1], key=len, reverse=True):
 		iters.append(DownLoadList.get_iter(itpath))
 	if maxi is None or len(iters) <= maxi:
 		for it in iters:
-			# TODO check if iterator deleted in meanwhile
 			func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
@@ -2151,6 +2157,7 @@ main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
 ContextMenuOpen = gtk.Menu()
+cmi_select_descends = StockMenuItem(_("Select Descends"), gtk.STOCK_INDENT)  # TODO
 cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
 cmi_open_file = StockMenuItem(None, gtk.STOCK_OPEN)
 cmi_open_folder = StockMenuItem(_("Open Folder"), gtk.STOCK_DIRECTORY)
@@ -2206,6 +2213,7 @@ toolbuttons = [
 	(None, gtk.STOCK_PREFERENCES, None, act_options),
 	(None, gtk.STOCK_QUIT, None, act_quit),
 ]
+# TODO btn_remove
 x, x_, btn_resume, btn_pause, btn_clear, btn_props, x_, x, x__, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
 
