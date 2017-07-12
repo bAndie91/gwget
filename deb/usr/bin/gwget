@@ -1618,7 +1618,13 @@ def act_new_folder():
 	main_selection.select_iter(it)
 	main_list.set_cursor(itpath, focus_column=tvc0, start_editing=True)
 
-def act_start_all():
+def act_select_completed():
+	main_selection.unselect_all()
+	for it, dl in iter_downloadtree(BaseDownload):
+		if dl.completed:
+			main_selection.select_iter(it)
+
+def act_resume_all():
 	for it, dl in iter_downloadtree(BaseDownload):
 		if not dl.running and not dl.completed:
 			act_start(None, dl)
@@ -1629,11 +1635,6 @@ def act_pause_all():
 			act_pause(None, dl)
 		elif dl['status'] == S_QUEUE:
 			dl.params['runnable'] = False
-
-def act_select_completed():
-	for it, dl in iter_downloadtree(BaseDownload):
-		if dl.completed:
-			main_selection.select_iter(it)
 
 def act_expand_all():
 	main_list.expand_all()
@@ -1672,6 +1673,10 @@ def act_open_clipboard(it, dl):
 
 def act_start(it, dl):
 	dl.start()
+
+def act_resume(it, dl):
+	if not dl.running and not dl.completed:
+		dl.start()
 
 def act_refetch(it, dl):
 	if dl.outfile is not None:
@@ -1761,7 +1766,8 @@ def act_props(it, dl):
 	reset_parameters(dl.params)
 	p1t1.set_text(dl.original_url or '')
 
-
+def act_select(it, dl):
+	main_selection.select_iter(it)
 
 def act_on_selection(func, maxi=None):
 	iters = []
@@ -1772,6 +1778,7 @@ def act_on_selection(func, maxi=None):
 			func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
+	# TODO Folders
 	iters = map(lambda p: DownLoadList.get_iter(p), selection.get_selected_rows()[1])
 	dls = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
 	num = len(iters)
@@ -1786,22 +1793,39 @@ def on_context_menu(menuitem, function):
 	function(it, dl)
 	return True
 
+def on_level_context_menu(menuitem, function):
+	rows = []
+	folder_it = FolderContextMenu.get_data('iterator')
+	child_it = DownLoadList.iter_children(folder_it)
+	while child_it is not None:
+		rows.append(DownLoadList[child_it])
+		child_it = DownLoadList.iter_next(child_it)
+	for row in rows:
+		child_it = row.iter
+		dl = row[COL_DLOBJ]
+		if not isinstance(dl, Folder):
+			function(child_it, dl)
+	return True
+
 def event_masked(event):
 	return any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META'])
 
 def popup_context_menu(it, event, button=None, placement_func=None):
-	# TODO regression
 	dl = DownLoadList[it][COL_DLOBJ]
-	ContextMenu.set_data('iterator', it)
-	cmi_open_file.set_sensitive(dl.outfile is not None)
-	cmi_open_referer.set_sensitive(dl.params.has_key('--referer'))
-	cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
-	cmi_refetch.set_sensitive(not dl.running)
-	cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
-	cmi_pause.set_sensitive(dl.running)
-	cmi_clear.set_sensitive(not dl.running)
+	if isinstance(dl, BaseDownload):
+		ctx_menu = ContextMenu
+		cmi_open_file.set_sensitive(dl.outfile is not None)
+		cmi_open_referer.set_sensitive(dl.params.has_key('--referer'))
+		cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
+		cmi_refetch.set_sensitive(not dl.running)
+		cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
+		cmi_pause.set_sensitive(dl.running)
+		cmi_clear.set_sensitive(not dl.running)
+	else:
+		ctx_menu = FolderContextMenu
+	ctx_menu.set_data('iterator', it)
 	if button is None: button = event.button
-	ContextMenu.popup(None, None, placement_func, button, event.time)
+	ctx_menu.popup(None, None, placement_func, button, event.time)
 
 def on_urls_edited(buf):
 	if len(p1t1.get_text().split()) > 1:
@@ -1818,11 +1842,13 @@ def on_treeview_click(tree, event):
 		it = DownLoadList.get_iter(itpath)
 		dl = DownLoadList[it][COL_DLOBJ]
 		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
+			# Right click
 			main_selection.unselect_all()
 			main_selection.select_iter(it)
 			popup_context_menu(it, event)
 			return True
 		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
+			# Left double click
 			act_open_file(it, dl)
 			return True
 	return False
@@ -1844,7 +1870,8 @@ def on_treeview_key(tree, event):
 	if event.keyval in map(gtk.gdk.keyval_from_name, ['Return', 'KP_Enter']):
 		if len(rows) == 1:
 			dl = DownLoadList[it][COL_DLOBJ]
-			act_open_file(it, dl)
+			if isinstance(dl, BaseDownload):
+				act_open_file(it, dl)
 		return True
 	return False
 
@@ -2157,7 +2184,6 @@ main_list = gtk.TreeView(DownLoadList)
 main_selection = main_list.get_selection()
 ContextMenu = gtk.Menu()
 ContextMenuOpen = gtk.Menu()
-cmi_select_descends = StockMenuItem(_("Select Descends"), gtk.STOCK_INDENT)  # TODO
 cmi_open = StockMenuItem(None, gtk.STOCK_OPEN)
 cmi_open_file = StockMenuItem(None, gtk.STOCK_OPEN)
 cmi_open_folder = StockMenuItem(_("Open Folder"), gtk.STOCK_DIRECTORY)
@@ -2170,6 +2196,13 @@ cmi_pause = StockMenuItem(_("Pause"), gtk.STOCK_MEDIA_PAUSE)
 cmi_clear = StockMenuItem(_("Clear"), gtk.STOCK_CLEAR)
 cmi_log = StockMenuItem(_("Show Log"), gtk.STOCK_INFO)
 cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
+FolderContextMenu = gtk.Menu()
+fcmi_select = StockMenuItem(_("Select Level"), gtk.STOCK_INDENT)
+fcmi_remove = StockMenuItem(_("Delete Files"), gtk.STOCK_DELETE)
+fcmi_refetch = StockMenuItem(_("Re-download All"), gtk.STOCK_REFRESH)
+fcmi_resume = StockMenuItem(_("Resume All"), gtk.STOCK_MEDIA_PLAY)
+fcmi_pause = StockMenuItem(_("Pause All"), gtk.STOCK_MEDIA_PAUSE)
+fcmi_clear = StockMenuItem(_("Clear All"), gtk.STOCK_CLEAR)
 
 
 # Configure main window's widgets
@@ -2179,7 +2212,7 @@ win_main.set_icon_name('emblem-downloads')
 start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
 win_main.connect('delete-event', lambda w,e: act_quit())
 add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
-add_key_binding(win_main, '<Control>r', lambda a,b,c,d: act_start_all())
+add_key_binding(win_main, '<Control>r', lambda a,b,c,d: act_resume_all())
 add_key_binding(win_main, '<Control>k', lambda a,b,c,d: act_pause_all())
 add_key_binding(win_main, '<Control>l', lambda a,b,c,d: act_on_selection(act_show_log, 1))
 add_key_binding(win_main, '<Control>p', lambda a,b,c,d: act_on_selection(act_props, 1))
@@ -2202,7 +2235,7 @@ toolbuttons = [
 	(_("Select Completed"), 
 		StockMenuToolButton(stock=gtk.STOCK_SELECT_ALL, 
 			menuitems=[
-				(gtk.STOCK_MEDIA_PLAY, _("Resume All"), lambda x: act_start_all()),
+				(gtk.STOCK_MEDIA_PLAY, _("Resume All"), lambda x: act_resume_all()),
 				(gtk.STOCK_MEDIA_PAUSE, _("Pause All"), lambda x: act_pause_all()),
 				gtk.SeparatorMenuItem(),
 				(gtk.STOCK_ZOOM_IN, _("Expand All"), lambda x: act_expand_all()),
@@ -2295,8 +2328,8 @@ main_list.set_rules_hint(True)
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
-#main_list.connect('button-press-event', on_treeview_click)
-#main_list.connect('key-press-event', on_treeview_key)
+main_list.connect('button-press-event', on_treeview_click)
+main_list.connect('key-press-event', on_treeview_key)
 #main_list.drag_dest_set(0, [], 0)
 #main_list.connect('drag-motion', DnD_motion)
 #main_list.connect('drag-drop', DnD_accept)
@@ -2315,6 +2348,12 @@ cmi_pause.connect('activate', on_context_menu, act_pause)
 cmi_clear.connect('activate', on_context_menu, act_clear_download)
 cmi_log.connect('activate', on_context_menu, act_show_log)
 cmi_props.connect('activate', on_context_menu, act_props)
+fcmi_select.connect('activate', on_level_context_menu, act_select)
+fcmi_remove.connect('activate', on_level_context_menu, act_remove_download)
+fcmi_refetch.connect('activate', on_level_context_menu, act_refetch)
+fcmi_resume.connect('activate', on_level_context_menu, act_resume)
+fcmi_pause.connect('activate', on_level_context_menu, act_pause)
+fcmi_clear.connect('activate', on_level_context_menu, act_clear_download)
 
 
 # Pack main window's widgets
@@ -2339,6 +2378,14 @@ ContextMenu.append(gtk.SeparatorMenuItem())
 ContextMenu.append(cmi_log)
 ContextMenu.append(cmi_props)
 ContextMenu.show_all()
+FolderContextMenu.append(fcmi_select)
+FolderContextMenu.append(gtk.SeparatorMenuItem())
+FolderContextMenu.append(fcmi_remove)
+FolderContextMenu.append(fcmi_refetch)
+FolderContextMenu.append(fcmi_resume)
+FolderContextMenu.append(fcmi_pause)
+FolderContextMenu.append(fcmi_clear)
+FolderContextMenu.show_all()
 
 
 ## New Download window
