@@ -1271,6 +1271,7 @@ def find_parent_iter_by_pathid(pathid):
 	return result[0]
 
 def import_downloads():
+	# TODO keep order
 	items = []
 	for f in os.listdir(CacheFolder):
 		if re.match('^gwget-\d+\.obj$', f):
@@ -1538,10 +1539,10 @@ def rename_downloaded_file(dl, newpath, warnfail=True):
 			return True
 	return False
 
-def DownLoadList_append_new(dldict, parent=None):
-	return DownLoadList_add_new(dldict, parent=parent)
+def DownLoadList_append_new(dldict, parent=None, after=None):
+	return DownLoadList_add_new(dldict, parent=parent, after=after)
 
-def DownLoadList_add_new(dldict, parent=None):
+def DownLoadList_add_new(dldict, parent=None, after=None):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
 	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
 	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE
@@ -1554,15 +1555,15 @@ def DownLoadList_add_new(dldict, parent=None):
 	row = [None, '', '', None, 0, '', '', 0, 0, -1, '', -1, '', '', '', '', False]
 	for idx, val in dldict.iteritems():
 		row[idx] = val
-	newiter = DownLoadList.append(parent, row)
+	newiter = DownLoadList.insert_after(parent, after, row)
 	row[COL_DLOBJ].row = DownLoadList[newiter]
 	row[COL_DLOBJ].materialized()
 	return newiter
 
-def DownLoadList_add_new_folder(parent=None):
+def DownLoadList_add_new_folder(parent=None, after=None):
 	return DownLoadList_add_new(
 		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True,},
-		parent = parent)
+		parent = parent, after = after)
 
 def start_new_download(url, params, start=True):
 	urlparts = urlparse.urlparse(url)
@@ -1610,8 +1611,7 @@ def act_new_folder():
 		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
 			after = parent
 			parent = DownLoadList.iter_parent(parent)
-	it = DownLoadList_add_new_folder(parent=parent)
-	DownLoadList.move_after(it, after)
+	it = DownLoadList_add_new_folder(parent=parent, after=after)
 	itpath = DownLoadList.get_path(it)
 	main_list.expand_to_path(itpath)
 	main_selection.unselect_all()
@@ -1691,10 +1691,17 @@ def act_remove_download(it, dl, force=False):
 		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
+def TreeModel_iter_prev(model, it):
+	itpath = model.get_string_from_iter(it).split(':')
+	if itpath[-1] == '0':
+		return None
+	else:
+		itpath[-1] = str(int(itpath[-1]) - 1)
+	return model.get_iter_from_string(':'.join(itpath))
+
 def DownLoadList_move(iterator, parent=None, sibling=None):
 	d = dict(zip(range(len(DownLoadList[iterator])), DownLoadList[iterator]))
-	moved_it = DownLoadList_append_new(d, parent=parent)
-	DownLoadList.move_after(moved_it, sibling)
+	moved_it = DownLoadList_append_new(d, parent=parent, after=sibling)
 	child_moved_it = None
 	while DownLoadList.iter_has_child(iterator):
 		child_moved_it = DownLoadList_move(DownLoadList.iter_children(iterator), moved_it, child_moved_it)
@@ -1914,18 +1921,29 @@ def DnD_motion(wdg, context, x, y, time):
 		if context.suggested_action & act:
 			action = act
 			break
-	if 'text/plain' in context.targets and action is not None:
-		wdg.drag_highlight()
-		context.drag_status(action, time)
-		return True
+	if action is not None:
+		if 'text/plain' in context.targets:
+			wdg.drag_highlight()
+			context.drag_status(action, time)
+			return True
+		if 'GTK_TREE_MODEL_ROW' in context.targets:
+			drop_dest = main_list.get_dest_row_at_pos(x, y)
+			if drop_dest is not None:
+				itpath, droppos = drop_dest[:]
+				main_list.set_drag_dest_row(itpath, droppos)
+				context.drag_status(action, time)
+				return True
 	return False
 
 def DnD_accept(wdg, context, x, y, time):
 	accepted = False
-	typ = 'text/plain'
-	if typ in context.targets:
-		wdg.drag_get_data(context, typ, time)
-		accepted = True
+	for typ in 'text/plain', 'GTK_TREE_MODEL_ROW':
+		if typ in context.targets:
+			if typ == 'GTK_TREE_MODEL_ROW':
+				context.set_data('drop-dest', main_list.get_dest_row_at_pos(x, y))
+			wdg.drag_get_data(context, typ, time)
+			accepted = True
+			break
 	context.drop_reply(accepted, time)
 	wdg.drag_unhighlight()
 	return True
@@ -1940,6 +1958,21 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 			p1t1.set_text(urls)
 			if context.action == gtk.gdk.ACTION_MOVE:
 				new_download()
+			success = True
+		elif typ == 'GTK_TREE_MODEL_ROW':
+			model, subject = selectiondata.tree_get_row_drag_data()
+			itpath, droppos = context.get_data('drop-dest')
+			relative = DownLoadList.get_iter(itpath)
+			if droppos in [gtk.TREE_VIEW_DROP_BEFORE, gtk.TREE_VIEW_DROP_AFTER] or not isinstance(DownLoadList[relative][COL_DLOBJ], Folder):
+				parent = DownLoadList.iter_parent(relative)
+				sibling = relative
+				if droppos == gtk.TREE_VIEW_DROP_BEFORE:
+					sibling = TreeModel_iter_prev(DownLoadList, sibling)
+			else:
+				parent = relative
+				sibling = None
+			# TODO make disorder
+			DownLoadList_move(DownLoadList.get_iter(subject), parent, sibling)
 			success = True
 	context.finish(success, False, time)
 	return True
@@ -2324,16 +2357,17 @@ tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
 main_list.append_column(tvc)
 
 main_list.set_rules_hint(True)
-#DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING) #TODO
+DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
+# TODO disorder ability
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
-#main_list.drag_dest_set(0, [], 0)
-#main_list.connect('drag-motion', DnD_motion)
-#main_list.connect('drag-drop', DnD_accept)
-#main_list.connect('drag-data-received', DnD_receive)
+main_list.drag_dest_set(0, [], 0)
+main_list.connect('drag-motion', DnD_motion)
+main_list.connect('drag-drop', DnD_accept)
+main_list.connect('drag-data-received', DnD_receive)
 # TODO multi DnD
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
