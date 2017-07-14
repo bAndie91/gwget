@@ -2282,79 +2282,57 @@ toolbuttons = [
 # TODO btn_remove
 x, x_, btn_resume, btn_pause, btn_clear, btn_props, x_, x, x__, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
-
 on_selection_change(main_selection)
 
 
-tvc0 = gtk.TreeViewColumn(_("Filename"))
-tvc0.set_resizable(True)
-tvc0.set_sort_column_id(COL_NAME)
-tvc0.set_sort_indicator(True)
-cr_pix = gtk.CellRendererPixbuf()
-cr_txt = gtk.CellRendererText()
-cr_txt.connect('editing-started', treeview_column0_editing)
-cr_txt.connect('editing-canceled', treeview_column0_edit_canceled)
-cr_txt.connect('edited', treeview_column0_edited)
-tvc0.pack_start(cr_pix, False)
-tvc0.pack_start(cr_txt, True)
-tvc0.add_attribute(cr_txt, 'text', COL_NAME)
-tvc0.add_attribute(cr_txt, 'editable', COL_NAMEEDITABLE)
-tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
-tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
-main_list.append_column(tvc0)
-tvc = gtk.TreeViewColumn(_("Progress"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_PERCENT)
-tvc.set_sort_indicator(True)
-cr_prc = gtk.CellRendererProgress()
-tvc.pack_start(cr_prc, True)
-tvc.add_attribute(cr_prc, 'text', COL_PRCSTR)
-tvc.add_attribute(cr_prc, 'value', COL_PERCENT)
-tvc.add_attribute(cr_prc, 'pulse', COL_PULSE)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Status"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_STATUS)
-tvc.set_sort_indicator(True)
-cr_pix = gtk.CellRendererPixbuf()
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_pix, False)
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_STATUS)
-tvc.add_attribute(cr_pix, 'icon-name', COL_STATUS_ICON)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Speed"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_SPEED_BPS)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_SPEED_STR)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Added"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_ADDED_TSTMP)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_ADDED_DATE)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("ETA"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_ETA_SEC)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_ETA_STR)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Message"))
-tvc.set_sort_column_id(COL_MESSAGE)
-tvc.set_sort_indicator(True)
-tvc.set_resizable(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
-main_list.append_column(tvc)
+main_columns = [
+	("Filename", COL_NAME, [
+		(gtk.CellRendererPixbuf, {'icon-name': COL_FILE_ICON, 'pixbuf': COL_PXB}),
+		(gtk.CellRendererText, {'text': COL_NAME, 'editable': COL_NAMEEDITABLE}),
+	]),
+	("Progress", COL_PERCENT, [
+		(gtk.CellRendererProgress, {'text': COL_PRCSTR, 'value': COL_PERCENT, 'pulse': COL_PULSE}),
+	]),
+	("Status", COL_STATUS, [
+		(gtk.CellRendererPixbuf, {'icon-name': COL_STATUS_ICON}),
+		(gtk.CellRendererText, {'text': COL_STATUS}),
+	]),
+	("Speed", COL_SPEED_BPS, [
+		(gtk.CellRendererText, {'text': COL_SPEED_STR}),
+	]),
+	("Added", COL_ADDED_TSTMP, [
+		(gtk.CellRendererText, {'text': COL_ADDED_DATE}),
+	]),
+	("ETA", COL_ETA_SEC, [
+		(gtk.CellRendererText, {'text': COL_ETA_STR}),
+	]),
+	("Message", COL_MESSAGE, [
+		(gtk.CellRendererText, {'markup': COL_MESSAGE}),
+	]),
+]
+for col_label, sort_col_id, cellrenderers in main_columns:
+	tvc = gtk.TreeViewColumn()
+	tvc.set_resizable(True)
+	tvc.set_sort_column_id(sort_col_id)
+	tvc.set_sort_indicator(True)
+	tvclbl = gtk.Label(_(col_label))
+	tvclbl.show()
+	tvc.set_widget(tvclbl)
+	for cellr in cellrenderers:
+		cr_class, attrib = cellr[:]
+		cr = cr_class()
+		expand = bool(cr_class != gtk.CellRendererPixbuf)
+		tvc.pack_start(cr, expand)
+		for attname, attvalue in attrib.iteritems():
+			tvc.add_attribute(cr, attname, attvalue)
+	main_list.append_column(tvc)
+
+tvc0 = main_list.get_column(0)
+tvc0cr = tvc0.get_cell_renderers()
+tvc0cr[1].connect('editing-started', treeview_column0_editing)
+tvc0cr[1].connect('editing-canceled', treeview_column0_edit_canceled)
+tvc0cr[1].connect('edited', treeview_column0_edited)
+
 
 main_list.set_rules_hint(True)
 DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
