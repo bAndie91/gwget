@@ -1183,11 +1183,6 @@ def win_main_show():
 		sid = col.connect('notify::width', column_width_change)
 		col.set_data('signal-notify::width', sid)
 	
-	# Start background thread
-	continous_refresh_thread = threading.Thread(target=continous_refresh, args=(60,))
-	continous_refresh_thread.daemon = True
-	continous_refresh_thread.start()
-	
 	# Parse CLI args
 	main_parse_cli(sys.argv)
 
@@ -1529,11 +1524,6 @@ def pulse_download(pid):
 				break
 		except KeyError:
 			pass
-
-def continous_refresh(wait):
-	while True:
-		refresh_download_state_all()
-		time.sleep(wait)
 
 def start_next_download(prev_dl):
 	assert(prev_dl.get_url())
