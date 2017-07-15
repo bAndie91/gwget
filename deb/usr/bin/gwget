@@ -1160,6 +1160,12 @@ def treeview_column0_edit_canceled(cellrenderer):
 
 def win_main_show():
 	# Manage GUI
+	for tvc in main_list.get_columns():
+		header = tvc.get_widget()
+		while header is not None and not isinstance(header, gtk.Button):
+			header = header.get_parent()
+		if header is not None:
+			header.connect('button-release-event', on_treeview_header_clicked)
 	
 	# Load cached downloads from object dumps
 	import_downloads()
@@ -1295,22 +1301,30 @@ def import_downloads():
 			for obj in items:
 				DownLoadList_append_new({COL_DLOBJ: obj})
 			break
-	def expander(model, path, it):
-		if hasattr(model[it][COL_DLOBJ], 'expanded') and bool(model[it][COL_DLOBJ].expanded):
-			main_list.expand_row(path, open_all=False)
-	DownLoadList.foreach(expander)
+	auto_expand_rows()
 	refresh_download_state_all()
 
 def export_downloads():
 	def each(model, path, it):
 		dl = model[it][COL_DLOBJ]
-		dl.expanded = main_list.row_expanded(path)
 		dl.pathid = path
 		dl.morior()
 		fh = open(dl.get_dumpfile(), 'w')
 		pickle.dump(dl, fh)
 		fh.close()
+	save_rows_expanded_state()
 	DownLoadList.foreach(each)
+
+def save_rows_expanded_state():
+	def save(model, path, it):
+		model[it][COL_DLOBJ].expanded = main_list.row_expanded(path)
+	DownLoadList.foreach(save)
+
+def auto_expand_rows():
+	def expander(model, path, it):
+		if hasattr(model[it][COL_DLOBJ], 'expanded') and bool(model[it][COL_DLOBJ].expanded):
+			main_list.expand_row(path, open_all=False)
+	DownLoadList.foreach(expander)
 
 class iter_downloadtree(object):
 	def __init__(self, onlyclass=None):
@@ -1848,17 +1862,42 @@ def on_treeview_click(tree, event):
 		itpath, col, cellx, celly = itpathinfo
 		it = DownLoadList.get_iter(itpath)
 		dl = DownLoadList[it][COL_DLOBJ]
-		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
-			# Right click
+		if event.type == gtk.gdk.BUTTON_PRESS and event.button == MOUSE_BUTTON_RIGHT:
 			main_selection.unselect_all()
 			main_selection.select_iter(it)
 			popup_context_menu(it, event)
 			return True
-		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
-			# Left double click
+		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == MOUSE_BUTTON_LEFT:
 			act_open_file(it, dl)
 			return True
 	return False
+
+def on_treeview_header_clicked(wdg, event):
+	if event.button == MOUSE_BUTTON_RIGHT:
+		menu = gtk.Menu()
+		mi = StockMenuItem(_("Set to unsorted"), gtk.STOCK_UNDO)
+		mi.connect('activate', act_unsort)
+		menu.append(mi)
+		menu.show_all()
+		menu.popup(None, None, None, event.button, event.time)
+
+def act_unsort(mi):
+	global DownLoadList
+	def copyto(model, path, it, dest):
+		if len(path) < 2:
+			parent = None
+		else:
+			parent = dest.get_iter(path[:-1])
+		dest.append(parent, model[it])
+	DownLoadList_sorted = DownLoadList
+	save_rows_expanded_state()
+	coltypes = []
+	for idx in range(DownLoadList.get_n_columns()):
+		coltypes.append(DownLoadList.get_column_type(idx))
+	DownLoadList = gtk.TreeStore(*coltypes)
+	DownLoadList_sorted.foreach(copyto, DownLoadList)
+	main_list.set_model(DownLoadList)
+	auto_expand_rows()
 
 def on_treeview_key(tree, event):
 	if event_masked(event):
@@ -1971,7 +2010,6 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 			else:
 				parent = relative
 				sibling = None
-			# TODO make disorder
 			DownLoadList_move(DownLoadList.get_iter(subject), parent, sibling)
 			success = True
 	context.finish(success, False, time)
@@ -2189,6 +2227,9 @@ StatusIcon = {
 # gwget cli options not requiring parameter
 ParameterlessOptions = ['--cwd-prefix', '--content-disposition']
 OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+MOUSE_BUTTON_LEFT = 1
+MOUSE_BUTTON_MIDDLE = 2
+MOUSE_BUTTON_RIGHT = 3
 
 
 # Check if application is already running
@@ -2336,7 +2377,6 @@ tvc0cr[1].connect('edited', treeview_column0_edited)
 
 main_list.set_rules_hint(True)
 DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
-# TODO disorder ability
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
