@@ -709,7 +709,7 @@ def guess_mime(path):
 class BaseTreeItem(object):
 	def __init__(self):
 		self.Lock = threading.Lock()
-		self.pathid = None
+		self.pathid = (0,)
 		self.logfile = next_logfile()
 		self.added_ts = time.time()
 	def morior(self):
@@ -718,10 +718,10 @@ class BaseTreeItem(object):
 	def resurgo(self):
 		self.Lock = threading.Lock()
 		# Upgrade object format by adding newer attribs.
-		for attrname in 'pathid',:
+		for attrname, attrdflt in ('pathid', (0,)),:
 			if not hasattr(self, attrname):
 				stderr((_("Update object model by add missing attr '%s'") % (attrname,)) + '\n')
-				setattr(self, attrname, None)
+				setattr(self, attrname, attrdflt)
 	def materialized(self):
 		pass
 	def configure(self, attrs, items):
