@@ -636,6 +636,14 @@ def convert_to_bytes(s, p='b'):
 	b = float(m.group(1)) * prefix[m.group(2).lower() or 'b']
 	return b / prefix[p]
 
+def humanize_bw(bps):
+	import math
+	if bps == 0: return '0B/s'
+	prefixum = ('B', 'K', 'M', 'G', 'T', 'P')
+	i = int(math.floor(math.log(bps, 1024)))
+	p = math.pow(1024, i)
+	return '%s%s/s' % (int(bps/p), prefixum[i])
+
 def set_xattrs_file(filename, attrs):
 	fh = open(filename, 'r')
 	try:
@@ -1363,9 +1371,19 @@ def called_by_self():
 	return any(c[2] == selfname for c in stack[:-2])
 
 def refresh_download_state_all():
-	return refresh_download_state(None)
+	refresh_download_state(None)
 
 def refresh_download_state(dlobj):
+	refresh_download_state_single(dlobj)
+	for it, dl in iter_downloadtree(BaseTreeItem):
+		if dlobj == dl:
+			parent = DownLoadList.iter_parent(it)
+			while parent is not None:
+				refresh_download_state_single(DownLoadList[parent][COL_DLOBJ])
+				parent = DownLoadList.iter_parent(parent)
+			break
+
+def refresh_download_state_single(dlobj):
 	if called_by_self():
 		return
 	if threading.currentThread().name != 'MainThread':
@@ -1401,6 +1419,8 @@ def refresh_download_state(dlobj):
 						row[COL_FILE_ICON] = gtk.STOCK_FILE
 				
 				if isinstance(dl, Folder):
+					row[COL_STATUS_ICON] = None
+					row[COL_STATUS] = ''
 					row[COL_ADDED_TSTMP] = dl.added_ts
 					row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
 					
@@ -1433,19 +1453,32 @@ def refresh_download_state(dlobj):
 									row[COL_PULSE] = 0
 								try: row[COL_PULSE] += 1
 								except TypeError: row[COL_PULSE] = 1
-						# TODO
-						#row[COL_STATUS_ICON] = StatusIcon[dl['status']]
-						#row[COL_STATUS] = _(Status[dl['status']])
-						row[COL_SPEED_BPS] = sum(dl.speed for dl in descendants)
-						row[COL_SPEED_STR] = str(row[COL_SPEED_BPS]) if row[COL_SPEED_BPS]>0 else ''   # TODO unit
-						row[COL_ETA_SEC] = max(dl.eta for dl in descendants)
-						row[COL_ETA_STR] = str(row[COL_ETA_SEC]) if row[COL_ETA_SEC]>=0 else ''  # TODO unit
+						
+						status = None
+						if any(dl['status']==S_ERR for dl in descendants):
+							status = S_ERR
+						elif any(dl['status']==S_DL for dl in descendants):
+							status = S_DL
+						elif any(dl['status']==S_STOP for dl in descendants):
+							status = S_STOP
+						elif all(dl['status']==S_QUEUE for dl in descendants):
+							status = S_QUEUE
+						elif all(dl['status']==S_SAVED for dl in descendants):
+							status = S_SAVED
+						if status is not None:
+							row[COL_STATUS_ICON] = StatusIcon[status]
+							row[COL_STATUS] = _(Status[status])
+						row[COL_SPEED_BPS] = sum(dl.speed if dl.running else 0 for dl in descendants)
+						if row[COL_SPEED_BPS] > 0:
+							row[COL_SPEED_STR] = humanize_bw(row[COL_SPEED_BPS])
+						if status == S_DL:
+							dl_maxeta = sorted(filter(lambda dl: dl.running, descendants), cmp = lambda a, b: a.eta > b.eta)[0]
+							row[COL_ETA_SEC] = dl_maxeta.eta
+							row[COL_ETA_STR] = dl_maxeta.eta_str
 					else:
 						row[COL_PERCENT] = -1
 						row[COL_PRCSTR] = ''
 						row[COL_PULSE] = 0
-						row[COL_STATUS_ICON] = ''
-						row[COL_STATUS] = ''
 						row[COL_SPEED_BPS] = -1
 						row[COL_SPEED_STR] = ''
 						row[COL_ETA_SEC] = -1
@@ -1484,7 +1517,6 @@ def refresh_download_state(dlobj):
 			if main_selection.iter_is_selected(it):
 				on_selection_change(main_selection)
 			if not doAll:
-				# TODO refesh chain of parents
 				break
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_leave()
@@ -1762,6 +1794,15 @@ def TreeModel_iter_prev(model, it):
 	return model.get_iter_from_string(':'.join(itpath))
 
 def DownLoadList_move(iterator, parent=None, sibling=None):
+	# Ensure parent is not descendant of iterator.
+	if parent is not None:
+		ipath = DownLoadList.get_path(iterator)
+		ppath = DownLoadList.get_path(parent)
+		if ppath[:len(ipath)] == ipath:
+			return False
+	return DownLoadList_move_unsafe(iterator, parent, sibling)
+
+def DownLoadList_move_unsafe(iterator, parent=None, sibling=None):
 	d = dict(zip(range(len(DownLoadList[iterator])), DownLoadList[iterator]))
 	moved_it = DownLoadList_append_new(d, parent=parent, after=sibling)
 	child_moved_it = None
@@ -1777,7 +1818,7 @@ def act_clear_download(it, dl):
 		parent = DownLoadList.iter_parent(it)
 		sibling = it
 		while DownLoadList.iter_has_child(it):
-			moved_it = DownLoadList_move(DownLoadList.iter_children(it), parent, sibling)
+			moved_it = DownLoadList_move_unsafe(DownLoadList.iter_children(it), parent, sibling)
 			main_selection.select_iter(moved_it)
 			sibling = moved_it
 		del DownLoadList[it]
@@ -1918,14 +1959,20 @@ def on_treeview_click(tree, event):
 			popup_context_menu(it, event)
 			return True
 		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == MOUSE_BUTTON_LEFT:
-			act_open_file(it, dl)
+			if isinstance(dl, Folder):
+				if main_list.row_expanded(itpath):
+					main_list.collapse_row(itpath)
+				else:
+					main_list.expand_row(itpath, open_all=False)
+			else:
+				act_open_file(it, dl)
 			return True
 	return False
 
 def on_treeview_header_clicked(wdg, event):
 	if event.button == MOUSE_BUTTON_RIGHT:
 		menu = gtk.Menu()
-		mi = StockMenuItem(_("Set to unsorted"), gtk.STOCK_UNDO)
+		mi = StockMenuItem(_("Turn off order"), gtk.STOCK_UNDO)
 		mi.connect('activate', act_unsort)
 		menu.append(mi)
 		menu.show_all()
@@ -2050,6 +2097,8 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 			success = True
 		elif typ == 'GTK_TREE_MODEL_ROW':
 			model, subject = selectiondata.tree_get_row_drag_data()
+			subject_it = DownLoadList.get_iter(subject)
+			old_parent = DownLoadList.iter_parent(subject_it)
 			itpath, droppos = context.get_data('drop-dest')
 			relative = DownLoadList.get_iter(itpath)
 			if droppos in [gtk.TREE_VIEW_DROP_BEFORE, gtk.TREE_VIEW_DROP_AFTER] or not isinstance(DownLoadList[relative][COL_DLOBJ], Folder):
@@ -2061,8 +2110,11 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 				parent = relative
 				sibling = None
 			save_rows_expanded_state()
-			DownLoadList_move(DownLoadList.get_iter(subject), parent, sibling)
+			DownLoadList_move(subject_it, parent, sibling)
 			auto_expand_rows()
+			for it in old_parent, parent:
+				if it is not None:
+					refresh_download_state(DownLoadList[it][COL_DLOBJ])
 			success = True
 	context.finish(success, False, time)
 	return True
@@ -2325,10 +2377,10 @@ cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
 FolderContextMenu = gtk.Menu()
 fcmi_select = StockMenuItem(_("Select Level"), gtk.STOCK_INDENT)
 fcmi_remove = StockMenuItem(_("Delete Files"), gtk.STOCK_DELETE)
-fcmi_refetch = StockMenuItem(_("Re-download All"), gtk.STOCK_REFRESH)
-fcmi_resume = StockMenuItem(_("Resume All"), gtk.STOCK_MEDIA_PLAY)
-fcmi_pause = StockMenuItem(_("Pause All"), gtk.STOCK_MEDIA_PAUSE)
-fcmi_clear = StockMenuItem(_("Clear All"), gtk.STOCK_CLEAR)
+fcmi_refetch = StockMenuItem(_("Re-download inner-least"), gtk.STOCK_REFRESH)
+fcmi_resume = StockMenuItem(_("Resume inner-least"), gtk.STOCK_MEDIA_PLAY)
+fcmi_pause = StockMenuItem(_("Pause inner-least"), gtk.STOCK_MEDIA_PAUSE)
+fcmi_clear = StockMenuItem(_("Clear inner-least"), gtk.STOCK_CLEAR)
 
 
 # Configure main window's widgets
