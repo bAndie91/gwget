@@ -703,6 +703,7 @@ class BaseTreeItem(object):
 		self.Lock = threading.Lock()
 		self.pathid = None
 		self.logfile = next_logfile()
+		self.added_ts = time.time()
 	def morior(self):
 		delattr(self, 'row')
 		delattr(self, 'Lock')
@@ -766,12 +767,11 @@ class Folder(BaseTreeItem):
 		self.row[COL_NAMEEDITABLE] = True
 	def rename(self, newname):
 		self.name = newname
-		self.row[COL_NAME] = newname  # TODO segfault on reordered (DnD'ed) row
+		self.row[COL_NAME] = newname
 
 class BaseDownload(BaseTreeItem):
 	def __init__(self, url, params={}):
 		super(BaseDownload, self).__init__()
-		self.added_ts = time.time()
 		self.original_url = url
 		self.params = params
 		self.outfile = None
@@ -1401,15 +1401,63 @@ def refresh_download_state(dlobj):
 						row[COL_FILE_ICON] = gtk.STOCK_FILE
 				
 				if isinstance(dl, Folder):
-					# TODO sum children
-					pass
+					row[COL_ADDED_TSTMP] = dl.added_ts
+					row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
+					
+					def gathering(model, it, klass, descendants):
+						child = model.iter_children(it)
+						while child is not None:
+							if isinstance(model[child][COL_DLOBJ], klass):
+								descendants.append(model[child][COL_DLOBJ])
+							gathering(model, child, klass, descendants)
+							child = model.iter_next(child)
+					descendants = []
+					gathering(DownLoadList, it, BaseDownload, descendants)
+					n_descendants = len(descendants)
+					
+					if n_descendants > 0:
+						if all(dl.percent >= 0 for dl in descendants):
+							row[COL_PULSE] = -1
+							row[COL_PERCENT] = sum(dl.percent for dl in descendants) / n_descendants
+							row[COL_PRCSTR] = str(int(row[COL_PERCENT])) + '%'
+						else:
+							row[COL_PERCENT] = 0
+							row[COL_PRCSTR] = ''
+							if all(dl.completed for dl in descendants):
+								row[COL_PERCENT] = 100
+								row[COL_PULSE] = gobject.constants.G_MAXINT
+							elif all(not dl.running for dl in descendants):
+								row[COL_PULSE] = 0
+							else:
+								if row[COL_PULSE] < 0:
+									row[COL_PULSE] = 0
+								try: row[COL_PULSE] += 1
+								except TypeError: row[COL_PULSE] = 1
+						# TODO
+						#row[COL_STATUS_ICON] = StatusIcon[dl['status']]
+						#row[COL_STATUS] = _(Status[dl['status']])
+						row[COL_SPEED_BPS] = sum(dl.speed for dl in descendants)
+						row[COL_SPEED_STR] = str(row[COL_SPEED_BPS]) if row[COL_SPEED_BPS]>0 else ''   # TODO unit
+						row[COL_ETA_SEC] = max(dl.eta for dl in descendants)
+						row[COL_ETA_STR] = str(row[COL_ETA_SEC]) if row[COL_ETA_SEC]>=0 else ''  # TODO unit
+					else:
+						row[COL_PERCENT] = -1
+						row[COL_PRCSTR] = ''
+						row[COL_PULSE] = 0
+						row[COL_STATUS_ICON] = ''
+						row[COL_STATUS] = ''
+						row[COL_SPEED_BPS] = -1
+						row[COL_SPEED_STR] = ''
+						row[COL_ETA_SEC] = -1
+						row[COL_ETA_STR] = ''
 				else:
 					if dl.percent >= 0:
 						row[COL_PULSE] = -1
 						row[COL_PERCENT] = dl.percent
-						row[COL_PRCSTR] = str(dl.percent) + '%'
+						row[COL_PRCSTR] = str(int(row[COL_PERCENT])) + '%'
 					else:
 						row[COL_PERCENT] = 0
+						row[COL_PRCSTR] = ''
 						if dl.running and not dl.completed:
 							if row[COL_PULSE] < 0:
 								row[COL_PULSE] = 0
@@ -1421,7 +1469,6 @@ def refresh_download_state(dlobj):
 								row[COL_PULSE] = gobject.constants.G_MAXINT
 							else:
 								row[COL_PULSE] = 0
-						row[COL_PRCSTR] = ''
 					row[COL_STATUS_ICON] = StatusIcon[dl['status']]
 					row[COL_STATUS] = _(Status[dl['status']])
 					row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
@@ -1437,6 +1484,7 @@ def refresh_download_state(dlobj):
 			if main_selection.iter_is_selected(it):
 				on_selection_change(main_selection)
 			if not doAll:
+				# TODO refesh chain of parents
 				break
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_leave()
@@ -1576,7 +1624,7 @@ def DownLoadList_add_new(dldict, parent=None, after=None):
 
 def DownLoadList_add_new_folder(parent=None, after=None):
 	return DownLoadList_add_new(
-		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True,},
+		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True},
 		parent = parent, after = after)
 
 def start_new_download(url, params, start=True):
