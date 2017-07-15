@@ -283,3 +283,50 @@ msgstr "Beállítás"
 msgid "Select Completed"
 msgstr "Készeket kijelöl"
 
+# file: gwget, line: 1297
+msgid "Can not load object: %s"
+msgstr "Objektum nem tölthető be: %s"
+
+# file: gwget, line: 1659
+msgid "Folder"
+msgstr "Mappa"
+
+# file: gwget, line: 1975
+msgid "Turn off order"
+msgstr "Rendezést kikapcsol"
+
+# file: gwget, line: 2378
+msgid "Select Level"
+msgstr "Szint kijelölése"
+
+# file: gwget, line: 2379
+msgid "Delete Files"
+msgstr "Fájlok törlése"
+
+# file: gwget, line: 2380
+msgid "Re-download inner-least"
+msgstr "Első szint letöltése újra"
+
+# file: gwget, line: 2381
+msgid "Resume inner-least"
+msgstr "Letöltések folytatása"
+
+# file: gwget, line: 2382
+msgid "Pause inner-least"
+msgstr "Letöltések megállítása"
+
+# file: gwget, line: 2383
+msgid "Clear inner-least"
+msgstr "Letöltések elfelejtése"
+
+# file: gwget, line: 2404
+msgid "New Folder"
+msgstr "Új Mappa"
+
+# file: gwget, line: 2419
+msgid "Expand All"
+msgstr "Mindet kinyit"
+
+# file: gwget, line: 2420
+msgid "Collapse All"
+msgstr "Mindet becsuk"

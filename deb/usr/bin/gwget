@@ -186,7 +186,7 @@ def choose_open_file(folder=None):
 class FileEntryCompletion(gtk.EntryCompletion):
 	def __init__(self, entry, actiontype=gtk.FILE_CHOOSER_ACTION_OPEN):
 		assert(isinstance(entry, gtk.Entry))
-		super(self.__class__, self).__init__()
+		super(FileEntryCompletion, self).__init__()
 		self.set_popup_completion(True)
 		self.set_popup_set_width(True)
 		self.model = gtk.ListStore(str, str)
@@ -228,7 +228,7 @@ class FileEntryCompletion(gtk.EntryCompletion):
 
 class FileChooserEntry(gtk.HBox):
 	def __init__(self, label='', path='', action=gtk.FILE_CHOOSER_ACTION_OPEN):
-		super(self.__class__, self).__init__(spacing=2)
+		super(FileChooserEntry, self).__init__(spacing=2)
 		self.Label = gtk.Label(label)
 		self.Label.set_alignment(0, 0)
 		self.Label.set_padding(2, 8)
@@ -272,7 +272,7 @@ class FileChooserEntry(gtk.HBox):
 
 class ScrolledTextView(gtk.ScrolledWindow):
 	def __init__(self):
-		super(self.__class__, self).__init__()
+		super(ScrolledTextView, self).__init__()
 		self.TextView = gtk.TextView()
 		self.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
 		self.set_shadow_type(gtk.SHADOW_IN)
@@ -298,7 +298,7 @@ class ScrolledTextView(gtk.ScrolledWindow):
 
 class LabelledEntry(gtk.HBox):
 	def __init__(self, label='', markup=None, tooltip=None, spacing=2):
-		super(self.__class__, self).__init__(spacing=spacing)
+		super(LabelledEntry, self).__init__(spacing=spacing)
 		self.Label = gtk.Label(label)
 		self.Entry = gtk.Entry()
 		self.Label.set_alignment(0, 0)
@@ -316,7 +316,7 @@ class LabelledEntry(gtk.HBox):
 
 
 def act_button(func):
-	if type(func) != type(()):
+	if type(func) != tuple:
 		func = (func,)
 	if func[0] is not None:
 		func[0](*func[1:])
@@ -331,7 +331,7 @@ class StockButton(gtk.Button):
 			stock_tmp = stock
 		else:
 			stock_tmp = gtk.STOCK_ABOUT
-		super(self.__class__, self).__init__(stock=stock_tmp, use_underline=use_underline)
+		super(StockButton, self).__init__(stock=stock_tmp, use_underline=use_underline)
 		if label is not None:
 			self.set_markup(label)
 		if stock is None:
@@ -365,7 +365,7 @@ class StockButton(gtk.Button):
 			img.props.visible = True
 
 class BaseStockToolButton(gtk.ToolItem):
-	def __init__(self, label=None, stock=None, tooltip=None):
+	def __init__(self, label=None, stock=None, tooltip=None, **kv):
 		if stock is not None:
 			if stock in gtk.stock_list_ids():
 				if stock is not None: self.set_stock_id(stock)
@@ -391,6 +391,16 @@ class StockMenuToolButton(gtk.MenuToolButton, BaseStockToolButton):
 	def __init__(self, **kv):
 		super(StockMenuToolButton, self).__init__(gtk.STOCK_MISSING_IMAGE)
 		BaseStockToolButton.__init__(self, **kv)
+		menu = gtk.Menu()
+		self.set_menu(menu)
+		if kv.has_key('menuitems'):
+			for mi in kv['menuitems']:
+				if type(mi) is tuple:
+					p = {}
+					p['stock_id'], p['label'], p['callback'] = mi
+					mi = StockMenuItem(**p)
+				menu.append(mi)
+		menu.show_all()
 
 class StockMenuItem(gtk.ImageMenuItem):
 	def __init__(self, label=None, stock_id=None, accel_group=None, callback=None):
@@ -626,6 +636,14 @@ def convert_to_bytes(s, p='b'):
 	b = float(m.group(1)) * prefix[m.group(2).lower() or 'b']
 	return b / prefix[p]
 
+def humanize_bw(bps):
+	import math
+	if bps == 0: return '0B/s'
+	prefixum = ('B', 'K', 'M', 'G', 'T', 'P')
+	i = int(math.floor(math.log(bps, 1024)))
+	p = math.pow(1024, i)
+	return '%s%s/s' % (int(bps/p), prefixum[i])
+
 def set_xattrs_file(filename, attrs):
 	fh = open(filename, 'r')
 	try:
@@ -664,6 +682,16 @@ def next_file_number(preglob, sufglob, n=1):
 		n += 1
 	return n
 
+def next_logfile():
+	num = 1
+	while True:
+		num = next_file_number(glob.escape(os.path.join(CacheFolder, 'gwget-')), '.log', num)
+		fpath = os.path.join(CacheFolder, 'gwget-%d.log' % (num))
+		if all(fpath != dl.logfile for it, dl in iter_downloadtree(BaseTreeItem)):
+			break
+		num += 1
+	return fpath
+
 if hasattr(magic, 'open'):
 	mime_magic = magic.open(magic.MAGIC_MIME_TYPE)
 	mime_magic.load()
@@ -678,18 +706,24 @@ def guess_mime(path):
 
 ### Private methods ###
 
-class BaseDownload(object):
-	def __init__(self, url, params={}):
-		self.added_ts = time.time()
-		self.logfile = next_logfile()
-		self.original_url = url
-		self.params = params
-		self.outfile = None
+class BaseTreeItem(object):
+	def __init__(self):
 		self.Lock = threading.Lock()
+		self.pathid = None
+		self.logfile = next_logfile()
+		self.added_ts = time.time()
 	def morior(self):
+		delattr(self, 'row')
 		delattr(self, 'Lock')
 	def resurgo(self):
 		self.Lock = threading.Lock()
+		# Upgrade object format by adding newer attribs.
+		for attrname in 'pathid',:
+			if not hasattr(self, attrname):
+				stderr((_("Update object model by add missing attr '%s'") % (attrname,)) + '\n')
+				setattr(self, attrname, None)
+	def materialized(self):
+		pass
 	def configure(self, attrs, items):
 		for k, v in attrs.iteritems():
 			setattr(self, k, v)
@@ -712,10 +746,6 @@ class BaseDownload(object):
 		setattr(self, '_' + key, val)
 		self.Lock.release()
 		return True
-	def get_dumpfile(self):
-		return self.logfile[:-3] + 'obj'
-	def get_url(self):
-		return self.original_url
 	def init(self):
 		self['status'] = S_QUEUE
 		self.completed = False
@@ -730,6 +760,31 @@ class BaseDownload(object):
 		self.eta = -1
 		self.eta_str = ''
 		self.lastline = ''
+	def get_dumpfile(self):
+		return self.logfile[:-3] + 'obj'
+
+class Folder(BaseTreeItem):
+	def __init__(self, name):
+		super(Folder, self).__init__()
+		self.init()
+		self.name = name
+	def materialized(self):
+		super(Folder, self).materialized()
+		self.row[COL_FILE_ICON] = gtk.STOCK_DIRECTORY
+		self.row[COL_NAME] = self.name
+		self.row[COL_NAMEEDITABLE] = True
+	def rename(self, newname):
+		self.name = newname
+		self.row[COL_NAME] = newname
+
+class BaseDownload(BaseTreeItem):
+	def __init__(self, url, params={}):
+		super(BaseDownload, self).__init__()
+		self.original_url = url
+		self.params = params
+		self.outfile = None
+	def get_url(self):
+		return self.original_url
 	def mark_completed(self):
 		self.completed = True
 		self['status'] = S_SAVED
@@ -743,14 +798,14 @@ class BaseDownload(object):
 
 class Download(BaseDownload):
 	def __init__(self, url, params={}):
-		super(self.__class__, self).__init__(url, params)
+		super(Download, self).__init__(url, params)
 		self.actual_url = None
 		self.progress_type = 'bar:force'
 		#self.progress_type = 'dot:default'
 		self._pid = None
 		self.init()
 	def resurgo(self):
-		super(self.__class__, self).resurgo()
+		super(Download, self).resurgo()
 		if self.running:
 			t2 = threading.Thread(target=self.watch_log, args=())
 			t2.daemon = True
@@ -767,7 +822,7 @@ class Download(BaseDownload):
 				try:
 					setxattributes(self)
 				except IOError as e:
-					print e.message
+					stderr(e.message+'\n')
 		setattr(self, '_' + key, val)
 		self.Lock.release()
 		return True
@@ -962,7 +1017,7 @@ class DataDownload(BaseDownload):
 		'url': urllib.unquote,
 	}
 	def __init__(self, url, params={}):
-		super(self.__class__, self).__init__(url, params)
+		super(DataDownload, self).__init__(url, params)
 		self.init()
 	def get_url(self):
 		return None
@@ -1083,25 +1138,29 @@ def lock_row_refresh(doLock):
 		refresh_download_state(row[COL_DLOBJ])
 
 def treeview_column0_editing(cellrenderer, editable, rownum):
-	row = DownLoadList[(int(rownum),)]
+	row = DownLoadList[DownLoadList.get_iter_from_string(rownum)]
 	main_list.set_data('editing-row', row)
 	dl = row[COL_DLOBJ]
-	if not os.path.exists(dl.outfile):
-		row[COL_NAMEEDITABLE] = False
-		return
+	if isinstance(dl, BaseDownload):
+		if not os.path.exists(dl.outfile):
+			row[COL_NAMEEDITABLE] = False
+			return
 	lock_row_refresh(True)
 
 def treeview_column0_edited(cellrenderer, itpathstr, newtext):
 	row = main_list.get_data('editing-row')
 	dl = row[COL_DLOBJ]
-	if dl.outfile:
-		newpath = os.path.join(os.path.dirname(dl.outfile), newtext)
-		if rename_downloaded_file(dl, newpath):
-			dl.manually_renamed = True
-			if os.path.isabs(newtext):
-				dl.params['rename_to'] = newpath
-			else:
-				dl.params['rename_to'] = relative_path(newpath, dl.params['--directory-prefix'])
+	if isinstance(dl, Folder):
+		dl.rename(newtext)
+	elif isinstance(dl, BaseDownload):
+		if dl.outfile:
+			newpath = os.path.join(os.path.dirname(dl.outfile), newtext)
+			if rename_downloaded_file(dl, newpath):
+				dl.manually_renamed = True
+				if os.path.isabs(newtext):
+					dl.params['rename_to'] = newpath
+				else:
+					dl.params['rename_to'] = relative_path(newpath, dl.params['--directory-prefix'])
 	lock_row_refresh(False)
 
 def treeview_column0_edit_canceled(cellrenderer):
@@ -1109,6 +1168,12 @@ def treeview_column0_edit_canceled(cellrenderer):
 
 def win_main_show():
 	# Manage GUI
+	for tvc in main_list.get_columns():
+		header = tvc.get_widget()
+		while header is not None and not isinstance(header, gtk.Button):
+			header = header.get_parent()
+		if header is not None:
+			header.connect('button-release-event', on_treeview_header_clicked)
 	
 	# Load cached downloads from object dumps
 	import_downloads()
@@ -1117,11 +1182,6 @@ def win_main_show():
 	for col in main_list.get_columns():
 		sid = col.connect('notify::width', column_width_change)
 		col.set_data('signal-notify::width', sid)
-	
-	# Start background thread
-	continous_refresh_thread = threading.Thread(target=continous_refresh, args=(60,))
-	continous_refresh_thread.daemon = True
-	continous_refresh_thread.start()
 	
 	# Parse CLI args
 	main_parse_cli(sys.argv)
@@ -1202,52 +1262,100 @@ def main_parse_cli(argv, append_url = False, cwd = None):
 		show_win_newdl()
 
 def act_quit():
-	if any(dl.running for it, dl in iter_downloadlist()) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
+	if any(dl.running for it, dl in iter_downloadtree(BaseDownload)) and not question(_("Running downloads will continue in the background.\nQuit anyway?"), yes=gtk.STOCK_QUIT, default=gtk.RESPONSE_NO):
 		return True
-	gtk.main_quit()
 	export_downloads()
+	gtk.main_quit()
 	return False
 
+
+def find_parent_iter_by_pathid(pathid):
+	if pathid is None or len(pathid) == 1: return None
+	def each(model, path, it, result):
+		if result[0] is not None: return
+		if model[it][COL_DLOBJ].pathid == ppathid: result[0] = it
+	ppathid = pathid[:-1]
+	result = [None]
+	DownLoadList.foreach(each, result)
+	return result[0]
+
 def import_downloads():
+	# TODO keep order
+	items = []
 	for f in os.listdir(CacheFolder):
 		if re.match('^gwget-\d+\.obj$', f):
 			f = os.path.join(CacheFolder, f)
 			fh = open(f, 'r')
-			obj = pickle.load(fh)
+			try:
+				obj = pickle.load(fh)
+			except EOFError:
+				stderr((_("Can not load object: %s") % (f,))+'\n')
 			fh.close()
 			obj.resurgo()
-			DownLoadList_append_new({COL_DLOBJ: obj})
+			items.append(obj)
+	while True:
+		n_items = len(items)
+		for obj in items:
+			parent = find_parent_iter_by_pathid(obj.pathid)
+			if parent is not None or len(obj.pathid) < 2:
+				DownLoadList_append_new({COL_DLOBJ: obj}, parent=parent)
+				del items[items.index(obj)]
+		if len(items) == n_items:
+			for obj in items:
+				DownLoadList_append_new({COL_DLOBJ: obj})
+			break
+	auto_expand_rows()
 	refresh_download_state_all()
 
 def export_downloads():
-	for it, dl in iter_downloadlist():
+	def each(model, path, it):
+		dl = model[it][COL_DLOBJ]
+		dl.pathid = path
 		dl.morior()
 		fh = open(dl.get_dumpfile(), 'w')
 		pickle.dump(dl, fh)
 		fh.close()
+	save_rows_expanded_state()
+	DownLoadList.foreach(each)
 
-def next_logfile():
-	num = 1
-	while True:
-		num = next_file_number(glob.escape(os.path.join(CacheFolder, 'gwget-')), '.log', num)
-		fpath = os.path.join(CacheFolder, 'gwget-%d.log' % (num))
-		if all(fpath != dl.logfile for it, dl in iter_downloadlist()):
-			break
-		num += 1
-	return fpath
+def save_rows_expanded_state():
+	def save(model, path, it):
+		model[it][COL_DLOBJ].expanded = main_list.row_expanded(path)
+	DownLoadList.foreach(save)
 
-class iter_downloadlist(object):
-	def __init__(self):
+def auto_expand_rows():
+	def expander(model, path, it):
+		if hasattr(model[it][COL_DLOBJ], 'expanded') and bool(model[it][COL_DLOBJ].expanded):
+			main_list.expand_row(path, open_all=False)
+	DownLoadList.foreach(expander)
+
+class iter_downloadtree(object):
+	def __init__(self, onlyclass=None):
 		self.model = DownLoadList
-		self.cur_iter = self.model.get_iter_first()
+		self.next_iter = self.model.get_iter_first()
+		self.onlyclass = onlyclass
 	def __iter__(self):
 		return self
 	def next(self):
-		if self.cur_iter is None:
-			raise StopIteration
-		ret= (self.cur_iter, self.model[self.cur_iter][COL_DLOBJ])
-		self.cur_iter = self.model.iter_next(self.cur_iter)
-		return ret
+		while True:
+			self.cur_iter = self.next_iter
+			if self.cur_iter is None:
+				raise StopIteration
+			if self.model.iter_has_child(self.cur_iter):
+				# Jump to children.
+				self.next_iter = self.model.iter_children(self.cur_iter)
+			else:
+				# Next sibling.
+				self.next_iter = self.model.iter_next(self.cur_iter)
+				if self.next_iter is None:
+					# Continue on uncle.
+					par = self.model.iter_parent(self.cur_iter)
+					if par is not None:
+						self.next_iter = self.model.iter_next(par)
+			dlobj = self.model[self.cur_iter][COL_DLOBJ]
+			if self.onlyclass is None or isinstance(dlobj, self.onlyclass):
+				return (self.cur_iter, dlobj)
+				break
 	def __del__(self):
 		pass
 
@@ -1258,72 +1366,149 @@ def called_by_self():
 	return any(c[2] == selfname for c in stack[:-2])
 
 def refresh_download_state_all():
-	return refresh_download_state(None)
+	refresh_download_state(None)
 
 def refresh_download_state(dlobj):
+	refresh_download_state_single(dlobj)
+	for it, dl in iter_downloadtree(BaseTreeItem):
+		if dlobj == dl:
+			parent = DownLoadList.iter_parent(it)
+			while parent is not None:
+				refresh_download_state_single(DownLoadList[parent][COL_DLOBJ])
+				parent = DownLoadList.iter_parent(parent)
+			break
+
+def refresh_download_state_single(dlobj):
 	if called_by_self():
 		return
 	if threading.currentThread().name != 'MainThread':
 		gtk.threads_enter()
 	doAll = dlobj is None
-	for it, dl in iter_downloadlist():
+	for it, dl in iter_downloadtree(BaseTreeItem):
 		row = DownLoadList[it]
 		if doAll or dlobj == dl:
 			if not(main_list.get_data('refresh-lock') and main_list.get_data('editing-row').path == DownLoadList[it].path):
-				if dl.outfile is None:
-					row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
-				else:
-					row[COL_NAME] = os.path.basename(dl.outfile)
-					if os.path.exists(dl.outfile):
-						row[COL_NAMEEDITABLE] = 1
-				
-				mime = dl.mime_local
-				if not mime:
-					if dl.completed:
-						dl.set_mime_local()
-						mime = dl.mime_local
-					if not dl.completed or mime is None:
-						mime = dl.mime_remote
-				icon = gio.content_type_get_icon(mime or MIME_DEFAULT)
-				theme = gtk.icon_theme_get_default()
-				info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
-				if info is not None:
-					row[COL_FILE_ICON] = None
-					row[COL_PXB] = info.load_icon()
-				else:
-					row[COL_PXB] = None
-					row[COL_FILE_ICON] = gtk.STOCK_FILE
-				
-				if dl.percent >= 0:
-					row[COL_PULSE] = -1
-					row[COL_PERCENT] = dl.percent
-					row[COL_PRCSTR] = str(dl.percent) + '%'
-				else:
-					row[COL_PERCENT] = 0
-					if dl.running and not dl.completed:
-						if row[COL_PULSE] < 0:
-							row[COL_PULSE] = 0
-						try: row[COL_PULSE] += 1
-						except TypeError: row[COL_PULSE] = 1
+				if isinstance(dl, BaseDownload):
+					if dl.outfile is None:
+						row[COL_NAME] = os.path.basename(re.sub('/+$', '', urlparse.urlparse(dl.get_url() or 'data').path))
 					else:
+						row[COL_NAME] = os.path.basename(dl.outfile)
+						if os.path.exists(dl.outfile):
+							row[COL_NAMEEDITABLE] = True
+					
+					mime = dl.mime_local
+					if not mime:
 						if dl.completed:
-							row[COL_PERCENT] = 100
-							row[COL_PULSE] = gobject.constants.G_MAXINT
-						else:
-							row[COL_PULSE] = 0
-					row[COL_PRCSTR] = ''
-				row[COL_STATUS_ICON] = StatusIcon[dl['status']]
-				row[COL_STATUS] = _(Status[dl['status']])
-				row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
+							dl.set_mime_local()
+							mime = dl.mime_local
+						if not dl.completed or mime is None:
+							mime = dl.mime_remote
+					icon = gio.content_type_get_icon(mime or MIME_DEFAULT)
+					theme = gtk.icon_theme_get_default()
+					info = theme.choose_icon(icon.get_names(), gtk.ICON_SIZE_MENU, 0)
+					if info is not None:
+						row[COL_FILE_ICON] = None
+						row[COL_PXB] = info.load_icon()
+					else:
+						row[COL_PXB] = None
+						row[COL_FILE_ICON] = gtk.STOCK_FILE
 				
-				row[COL_SPEED_BPS] = dl.speed
-				row[COL_SPEED_STR] = dl.speed_str
-				row[COL_ETA_SEC] = dl.eta
-				row[COL_ETA_STR] = dl.eta_str
-				row[COL_ADDED_TSTMP] = dl.added_ts
-				row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
+				if isinstance(dl, Folder):
+					row[COL_STATUS_ICON] = None
+					row[COL_STATUS] = ''
+					row[COL_ADDED_TSTMP] = dl.added_ts
+					row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
+					
+					def gathering(model, it, klass, descendants):
+						child = model.iter_children(it)
+						while child is not None:
+							if isinstance(model[child][COL_DLOBJ], klass):
+								descendants.append(model[child][COL_DLOBJ])
+							gathering(model, child, klass, descendants)
+							child = model.iter_next(child)
+					descendants = []
+					gathering(DownLoadList, it, BaseDownload, descendants)
+					n_descendants = len(descendants)
+					
+					if n_descendants > 0:
+						if all(dl.percent >= 0 for dl in descendants):
+							row[COL_PULSE] = -1
+							row[COL_PERCENT] = sum(dl.percent for dl in descendants) / n_descendants
+							row[COL_PRCSTR] = str(int(row[COL_PERCENT])) + '%'
+						else:
+							row[COL_PERCENT] = 0
+							row[COL_PRCSTR] = ''
+							if all(dl.completed for dl in descendants):
+								row[COL_PERCENT] = 100
+								row[COL_PULSE] = gobject.constants.G_MAXINT
+							elif all(not dl.running for dl in descendants):
+								row[COL_PULSE] = 0
+							else:
+								if row[COL_PULSE] < 0:
+									row[COL_PULSE] = 0
+								try: row[COL_PULSE] += 1
+								except TypeError: row[COL_PULSE] = 1
+						
+						status = None
+						if any(dl['status']==S_ERR for dl in descendants):
+							status = S_ERR
+						elif any(dl['status']==S_DL for dl in descendants):
+							status = S_DL
+						elif any(dl['status']==S_STOP for dl in descendants):
+							status = S_STOP
+						elif all(dl['status']==S_QUEUE for dl in descendants):
+							status = S_QUEUE
+						elif all(dl['status']==S_SAVED for dl in descendants):
+							status = S_SAVED
+						if status is not None:
+							row[COL_STATUS_ICON] = StatusIcon[status]
+							row[COL_STATUS] = _(Status[status])
+						row[COL_SPEED_BPS] = sum(dl.speed if dl.running else 0 for dl in descendants)
+						if row[COL_SPEED_BPS] > 0:
+							row[COL_SPEED_STR] = humanize_bw(row[COL_SPEED_BPS])
+						if status == S_DL:
+							dl_maxeta = sorted(filter(lambda dl: dl.running, descendants), cmp = lambda a, b: a.eta > b.eta)[0]
+							row[COL_ETA_SEC] = dl_maxeta.eta
+							row[COL_ETA_STR] = dl_maxeta.eta_str
+					else:
+						row[COL_PERCENT] = 0
+						row[COL_PRCSTR] = ''
+						row[COL_PULSE] = 0
+						row[COL_SPEED_BPS] = -1
+						row[COL_SPEED_STR] = ''
+						row[COL_ETA_SEC] = -1
+						row[COL_ETA_STR] = ''
+				else:
+					if dl.percent >= 0:
+						row[COL_PULSE] = -1
+						row[COL_PERCENT] = dl.percent
+						row[COL_PRCSTR] = str(int(row[COL_PERCENT])) + '%'
+					else:
+						row[COL_PERCENT] = 0
+						row[COL_PRCSTR] = ''
+						if dl.running and not dl.completed:
+							if row[COL_PULSE] < 0:
+								row[COL_PULSE] = 0
+							try: row[COL_PULSE] += 1
+							except TypeError: row[COL_PULSE] = 1
+						else:
+							if dl.completed:
+								row[COL_PERCENT] = 100
+								row[COL_PULSE] = gobject.constants.G_MAXINT
+							else:
+								row[COL_PULSE] = 0
+					row[COL_STATUS_ICON] = StatusIcon[dl['status']]
+					row[COL_STATUS] = _(Status[dl['status']])
+					row[COL_MESSAGE] = '<tt>' + glib.markup_escape_text(dl.lastline) + '</tt>'
+				
+					row[COL_SPEED_BPS] = dl.speed
+					row[COL_SPEED_STR] = dl.speed_str
+					row[COL_ETA_SEC] = dl.eta
+					row[COL_ETA_STR] = dl.eta_str
+					row[COL_ADDED_TSTMP] = dl.added_ts
+					row[COL_ADDED_DATE] = str_accurate_at_time(dl.added_ts)
 			
-			# if the current download is selected, then refresh toolbuttons sensitivity
+			# If the current download is selected, then refresh toolbuttons sensitivity.
 			if main_selection.iter_is_selected(it):
 				on_selection_change(main_selection)
 			if not doAll:
@@ -1332,7 +1517,7 @@ def refresh_download_state(dlobj):
 		gtk.threads_leave()
 
 def pulse_download(pid):
-	for it, dl in iter_downloadlist():
+	for it, dl in iter_downloadtree(BaseDownload):
 		try:
 			if dl['pid'] == pid:
 				DownLoadList[it][COL_PULSE] += 1
@@ -1340,16 +1525,11 @@ def pulse_download(pid):
 		except KeyError:
 			pass
 
-def continous_refresh(wait):
-	while True:
-		refresh_download_state_all()
-		time.sleep(wait)
-
 def start_next_download(prev_dl):
 	assert(prev_dl.get_url())
 	this_host = urlparse.urlparse(prev_dl.get_url()).hostname
 	start_dl = None
-	for it, dl in sorted(iter_downloadlist(), key = lambda(it, dl): dl.added_ts):
+	for it, dl in sorted(iter_downloadtree(BaseDownload), key = lambda(it, dl): dl.added_ts):
 		if not dl.get_url(): continue
 		if dl.params['runnable'] and this_host == urlparse.urlparse(dl.get_url()).hostname:
 			# this is a DL on the same host as the finished one was on
@@ -1443,7 +1623,10 @@ def rename_downloaded_file(dl, newpath, warnfail=True):
 			return True
 	return False
 
-def DownLoadList_append_new(d):
+def DownLoadList_append_new(dldict, parent=None, after=None):
+	return DownLoadList_add_new(dldict, parent=parent, after=after)
+
+def DownLoadList_add_new(dldict, parent=None, after=None):
 	# COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, 
 	#   COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, 
 	#   COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE
@@ -1453,25 +1636,45 @@ def DownLoadList_append_new(d):
 	# it = DownLoadList.append([dl, os.path.basename(url), gtk.STOCK_FILE, None, int(time.time()), str_accurate_at_time(time.time()), 
 	#   '', 0, 0, -1, '', 
 	#   -1, '', gtk.STOCK_MEDIA_STOP, _(Status[S_QUEUE]), '', False])
-	row = [None, '', '', None, 0, '',  '', 0, 0, -1, '',  -1, '', '', '', '', False]
-	for idx, val in d.iteritems():
+	row = [None, '', '', None, 0, '', '', 0, 0, -1, '', -1, '', '', '', '', False]
+	for idx, val in dldict.iteritems():
 		row[idx] = val
-	return DownLoadList.append(row)
+	newiter = DownLoadList.insert_after(parent, after, row)
+	row[COL_DLOBJ].row = DownLoadList[newiter]
+	row[COL_DLOBJ].materialized()
+	return newiter
 
-def start_new_download(url, params, start=True):
+def DownLoadList_add_new_folder(parent=None, after=None):
+	return DownLoadList_add_new(
+		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True},
+		parent = parent, after = after)
+
+def get_new_item_position():
+	parent = None
+	after = None
+	itpaths = main_selection.get_selected_rows()[1]
+	if len(itpaths) > 0:
+		parent = DownLoadList.get_iter(itpaths[0])
+		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
+			after = parent
+			parent = DownLoadList.iter_parent(parent)
+	return (parent, after)
+
+def start_new_download(url, params, start=True, parent=None, after=None):
 	urlparts = urlparse.urlparse(url)
 	if urlparts.scheme == 'data':
 		dl = DataDownload(url, params)
 		start = True
 	else:
 		dl = Download(url, params)
-	it = DownLoadList_append_new({COL_DLOBJ: dl})
+	it = DownLoadList_append_new({COL_DLOBJ: dl}, parent, after)
 	refresh_download_state(dl)
 	if start:
 		dl.start()
 	return it
 
 def reset_parameters(params={}):
+	p1t1.set_text('')
 	for opt, prmdisp in ParamDispatchers.iteritems():
 		if params.has_key(opt):
 			# Fill widgets with given wget parameters.
@@ -1495,22 +1698,41 @@ def act_new():
 	show_win_newdl()
 	reset_parameters()
 
-def act_start_all():
-	for it, dl in iter_downloadlist():
+def act_new_folder():
+	it = add_new_folder()
+	itpath = DownLoadList.get_path(it)
+	main_list.expand_to_path(itpath)
+	main_selection.unselect_all()
+	main_selection.select_iter(it)
+	main_list.set_cursor(itpath, focus_column=tvc0, start_editing=True)
+
+def add_new_folder():
+	parent, after = get_new_item_position()
+	return DownLoadList_add_new_folder(parent=parent, after=after)
+
+def act_select_completed():
+	main_selection.unselect_all()
+	for it, dl in iter_downloadtree(BaseDownload):
+		if dl.completed:
+			main_selection.select_iter(it)
+
+def act_resume_all():
+	for it, dl in iter_downloadtree(BaseDownload):
 		if not dl.running and not dl.completed:
 			act_start(None, dl)
 
 def act_pause_all():
-	for it, dl in iter_downloadlist():
+	for it, dl in iter_downloadtree(BaseDownload):
 		if dl.running:
 			act_pause(None, dl)
 		elif dl['status'] == S_QUEUE:
 			dl.params['runnable'] = False
 
-def act_select_completed():
-	for it, dl in iter_downloadlist():
-		if dl.completed:
-			main_selection.select_iter(it)
+def act_expand_all():
+	main_list.expand_all()
+
+def act_collapse_all():
+	main_list.collapse_all()
 
 def act_options():
 	win_opts = gtk.Window()
@@ -1525,21 +1747,28 @@ def act_options():
 	win_opts.show_all()
 
 
+def shell_open(path):
+	return run_detached('mimeopen-gui', [path])
+
 def act_open_file(it, dl):
 	if dl.outfile is not None:
-		run_detached('mimeopen-gui', [dl.outfile])
+		shell_open(dl.outfile)
 
 def act_open_folder(it, dl):
-	run_detached('mimeopen-gui', [os.path.dirname(dl.outfile)])
+	shell_open(os.path.dirname(dl.outfile))
 
 def act_open_referer(it, dl):
-	run_detached('mimeopen-gui', [dl.params['--referer']])
+	shell_open(dl.params['--referer'])
 
 def act_open_clipboard(it, dl):
 	Clipboard.set_text(dl.outfile)
 
 def act_start(it, dl):
 	dl.start()
+
+def act_resume(it, dl):
+	if not dl.running and not dl.completed:
+		dl.start()
 
 def act_refetch(it, dl):
 	if dl.outfile is not None:
@@ -1554,17 +1783,55 @@ def act_remove_download(it, dl, force=False):
 		if not dl.completed or force or question(_("Do you want to <b>delete completed</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, default=gtk.RESPONSE_NO):
 			delete(dl.outfile)
 
+def TreeModel_iter_prev(model, it):
+	itpath = model.get_string_from_iter(it).split(':')
+	if itpath[-1] == '0':
+		return None
+	else:
+		itpath[-1] = str(int(itpath[-1]) - 1)
+	return model.get_iter_from_string(':'.join(itpath))
+
+def DownLoadList_move(iterator, parent=None, sibling=None):
+	# Ensure parent is not descendant of iterator.
+	if parent is not None:
+		ipath = DownLoadList.get_path(iterator)
+		ppath = DownLoadList.get_path(parent)
+		if ppath[:len(ipath)] == ipath:
+			return False
+	return DownLoadList_move_unsafe(iterator, parent, sibling)
+
+def DownLoadList_move_unsafe(iterator, parent=None, sibling=None):
+	d = dict(zip(range(len(DownLoadList[iterator])), DownLoadList[iterator]))
+	moved_it = DownLoadList_append_new(d, parent=parent, after=sibling)
+	child_moved_it = None
+	while DownLoadList.iter_has_child(iterator):
+		child_moved_it = DownLoadList_move(DownLoadList.iter_children(iterator), moved_it, child_moved_it)
+	del DownLoadList[iterator]
+	return moved_it
+
 def act_clear_download(it, dl):
-	if not dl.running:
-		if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
-			try:
-				if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
-					act_remove_download(it, dl, force=True)
-			except DialogCancel:
-				return
-		if dl.logfile is not None:
-			untrack_download_file(dl)
+	if isinstance(dl, Folder):
+		main_selection.unselect_all()
+		# Move all children to one level up.
+		parent = DownLoadList.iter_parent(it)
+		sibling = it
+		while DownLoadList.iter_has_child(it):
+			moved_it = DownLoadList_move_unsafe(DownLoadList.iter_children(it), parent, sibling)
+			main_selection.select_iter(moved_it)
+			sibling = moved_it
 		del DownLoadList[it]
+		delete(dl.get_dumpfile())
+	else:
+		if not dl.running:
+			if not dl.completed and dl.outfile is not None and os.path.exists(dl.outfile):
+				try:
+					if question(_("This download is not completed.\nDo you want to <b>delete partial</b> file?\nURL: <tt>%s</tt>\nFile: <tt>%s</tt>") % (glib.markup_escape_text(dl.original_url or '') or MDASH_UTF8, glib.markup_escape_text(dl.outfile or '') or MDASH_UTF8), yes=gtk.STOCK_DELETE, no=(_("Clear"), gtk.STOCK_CLEAR), cancelable=True, default=gtk.RESPONSE_CANCEL):
+						act_remove_download(it, dl, force=True)
+				except DialogCancel:
+					return
+			if dl.logfile is not None:
+				untrack_download_file(dl)
+			del DownLoadList[it]
 
 def untrack_download_file(dl):
 	delete(dl.get_dumpfile())
@@ -1607,11 +1874,12 @@ def act_props(it, dl):
 	reset_parameters(dl.params)
 	p1t1.set_text(dl.original_url or '')
 
-
+def act_select(it, dl):
+	main_selection.select_iter(it)
 
 def act_on_selection(func, maxi=None):
 	iters = []
-	for itpath in main_selection.get_selected_rows()[1]:
+	for itpath in sorted(main_selection.get_selected_rows()[1], key=len, reverse=True):
 		iters.append(DownLoadList.get_iter(itpath))
 	if maxi is None or len(iters) <= maxi:
 		for it in iters:
@@ -1619,12 +1887,15 @@ def act_on_selection(func, maxi=None):
 
 def on_selection_change(selection):
 	iters = map(lambda p: DownLoadList.get_iter(p), selection.get_selected_rows()[1])
-	dls = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
-	num = len(iters)
-	btn_resume.set_sensitive(num>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
-	btn_pause.set_sensitive(num>0 and all(dl.running for dl in dls))
-	btn_clear.set_sensitive(num>0 and all(not dl.running for dl in dls))
-	btn_props.set_sensitive(num == 1)
+	objs = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
+	dls = filter(lambda obj: isinstance(obj, BaseDownload), objs)
+	n_objs = len(objs)
+	n_dls = len(dls)
+	# TODO resume and pause on Folders
+	btn_resume.set_sensitive(n_dls>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
+	btn_pause.set_sensitive(n_dls>0 and all(dl.running for dl in dls))
+	btn_clear.set_sensitive(n_objs>0 and all(not dl.running for dl in dls))
+	btn_props.set_sensitive(n_objs == 1 and n_dls == 1)
 
 def on_context_menu(menuitem, function):
 	it = ContextMenu.get_data('iterator')
@@ -1632,21 +1903,39 @@ def on_context_menu(menuitem, function):
 	function(it, dl)
 	return True
 
+def on_level_context_menu(menuitem, function):
+	rows = []
+	folder_it = FolderContextMenu.get_data('iterator')
+	child_it = DownLoadList.iter_children(folder_it)
+	while child_it is not None:
+		rows.append(DownLoadList[child_it])
+		child_it = DownLoadList.iter_next(child_it)
+	for row in rows:
+		child_it = row.iter
+		dl = row[COL_DLOBJ]
+		if not isinstance(dl, Folder):
+			function(child_it, dl)
+	return True
+
 def event_masked(event):
 	return any(event.state & getattr(gtk.gdk, mask+'_MASK') for mask in ['CONTROL','SHIFT','MOD4','MOD5','META'])
 
 def popup_context_menu(it, event, button=None, placement_func=None):
 	dl = DownLoadList[it][COL_DLOBJ]
-	ContextMenu.set_data('iterator', it)
-	cmi_open_file.set_sensitive(dl.outfile is not None)
-	cmi_open_referer.set_sensitive(dl.params.has_key('--referer'))
-	cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
-	cmi_refetch.set_sensitive(not dl.running)
-	cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
-	cmi_pause.set_sensitive(dl.running)
-	cmi_clear.set_sensitive(not dl.running)
+	if isinstance(dl, BaseDownload):
+		ctx_menu = ContextMenu
+		cmi_open_file.set_sensitive(dl.outfile is not None)
+		cmi_open_referer.set_sensitive(dl.params.has_key('--referer'))
+		cmi_remove.set_sensitive(dl.outfile is not None and not dl.running and os.path.exists(dl.outfile))
+		cmi_refetch.set_sensitive(not dl.running)
+		cmi_resume.set_sensitive(not dl.running and not(dl.completed and os.path.exists(dl.outfile)))
+		cmi_pause.set_sensitive(dl.running)
+		cmi_clear.set_sensitive(not dl.running)
+	else:
+		ctx_menu = FolderContextMenu
+	ctx_menu.set_data('iterator', it)
 	if button is None: button = event.button
-	ContextMenu.popup(None, None, placement_func, button, event.time)
+	ctx_menu.popup(None, None, placement_func, button, event.time)
 
 def on_urls_edited(buf):
 	if len(p1t1.get_text().split()) > 1:
@@ -1662,15 +1951,48 @@ def on_treeview_click(tree, event):
 		itpath, col, cellx, celly = itpathinfo
 		it = DownLoadList.get_iter(itpath)
 		dl = DownLoadList[it][COL_DLOBJ]
-		if event.type == gtk.gdk.BUTTON_PRESS and event.button == 3:
+		if event.type == gtk.gdk.BUTTON_PRESS and event.button == MOUSE_BUTTON_RIGHT:
 			main_selection.unselect_all()
 			main_selection.select_iter(it)
 			popup_context_menu(it, event)
 			return True
-		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == 1:
-			act_open_file(it, dl)
+		elif event.type == gtk.gdk._2BUTTON_PRESS and event.button == MOUSE_BUTTON_LEFT:
+			if isinstance(dl, Folder):
+				if main_list.row_expanded(itpath):
+					main_list.collapse_row(itpath)
+				else:
+					main_list.expand_row(itpath, open_all=False)
+			else:
+				act_open_file(it, dl)
 			return True
 	return False
+
+def on_treeview_header_clicked(wdg, event):
+	if event.button == MOUSE_BUTTON_RIGHT:
+		menu = gtk.Menu()
+		mi = StockMenuItem(_("Turn off order"), gtk.STOCK_UNDO)
+		mi.connect('activate', act_unsort)
+		menu.append(mi)
+		menu.show_all()
+		menu.popup(None, None, None, event.button, event.time)
+
+def act_unsort(mi):
+	global DownLoadList
+	def copyto(model, path, it, dest):
+		if len(path) < 2:
+			parent = None
+		else:
+			parent = dest.get_iter(path[:-1])
+		dest.append(parent, model[it])
+	DownLoadList_sorted = DownLoadList
+	save_rows_expanded_state()
+	coltypes = []
+	for idx in range(DownLoadList.get_n_columns()):
+		coltypes.append(DownLoadList.get_column_type(idx))
+	DownLoadList = gtk.TreeStore(*coltypes)
+	DownLoadList_sorted.foreach(copyto, DownLoadList)
+	main_list.set_model(DownLoadList)
+	auto_expand_rows()
 
 def on_treeview_key(tree, event):
 	if event_masked(event):
@@ -1689,7 +2011,8 @@ def on_treeview_key(tree, event):
 	if event.keyval in map(gtk.gdk.keyval_from_name, ['Return', 'KP_Enter']):
 		if len(rows) == 1:
 			dl = DownLoadList[it][COL_DLOBJ]
-			act_open_file(it, dl)
+			if isinstance(dl, BaseDownload):
+				act_open_file(it, dl)
 		return True
 	return False
 
@@ -1707,19 +2030,31 @@ def new_download(start=True, doOpen=False):
 		prmdisp.update_params_dict(params)
 	if doOpen:
 		params['on_complete'] = 'mimeopen-gui {}'
-	params['runnable'] = start
+	params['runnable'] = bool(start)
 	
-	main_selection.unselect_all()
 	uniq_url = {}
 	uniq_host = {}
-	for url in p1t1.get_text().split():
+	urls = p1t1.get_text().split()
+	if len(urls) > 1:
+		parent_it = add_new_folder()
+		after_it = None
+	else:
+		parent_it, after_it = get_new_item_position()
+	if parent_it is not None:
+		parent_itpath = DownLoadList.get_path(parent_it)
+		main_list.expand_to_path(parent_itpath)
+	main_selection.unselect_all()
+	
+	for url in urls:
 		if not uniq_url.has_key(url):
 			this_hostname = urlparse.urlparse(url).hostname
 			if start:
 				start_this = all(this_hostname != host for host in uniq_host.iterkeys())
 			else:
 				start_this = False
-			it = start_new_download(url, params, start=start_this)
+			it = start_new_download(url, params, start=start_this, parent=parent_it, after=after_it)
+			if parent_it is not None:
+				main_list.expand_row(parent_itpath, open_all=False)
 			main_selection.select_iter(it)
 			uniq_url[url] = 1
 			uniq_host[this_hostname] = 1
@@ -1731,18 +2066,29 @@ def DnD_motion(wdg, context, x, y, time):
 		if context.suggested_action & act:
 			action = act
 			break
-	if 'text/plain' in context.targets and action is not None:
-		wdg.drag_highlight()
-		context.drag_status(action, time)
-		return True
+	if action is not None:
+		if 'text/plain' in context.targets:
+			wdg.drag_highlight()
+			context.drag_status(action, time)
+			return True
+		if 'GTK_TREE_MODEL_ROW' in context.targets:
+			drop_dest = main_list.get_dest_row_at_pos(x, y)
+			if drop_dest is not None:
+				itpath, droppos = drop_dest[:]
+				main_list.set_drag_dest_row(itpath, droppos)
+				context.drag_status(action, time)
+				return True
 	return False
 
 def DnD_accept(wdg, context, x, y, time):
 	accepted = False
-	typ = 'text/plain'
-	if typ in context.targets:
-		wdg.drag_get_data(context, typ, time)
-		accepted = True
+	for typ in 'text/plain', 'GTK_TREE_MODEL_ROW':
+		if typ in context.targets:
+			if typ == 'GTK_TREE_MODEL_ROW':
+				context.set_data('drop-dest', main_list.get_dest_row_at_pos(x, y))
+			wdg.drag_get_data(context, typ, time)
+			accepted = True
+			break
 	context.drop_reply(accepted, time)
 	wdg.drag_unhighlight()
 	return True
@@ -1757,6 +2103,27 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 			p1t1.set_text(urls)
 			if context.action == gtk.gdk.ACTION_MOVE:
 				new_download()
+			success = True
+		elif typ == 'GTK_TREE_MODEL_ROW':
+			model, subject = selectiondata.tree_get_row_drag_data()
+			subject_it = DownLoadList.get_iter(subject)
+			old_parent = DownLoadList.iter_parent(subject_it)
+			itpath, droppos = context.get_data('drop-dest')
+			relative = DownLoadList.get_iter(itpath)
+			if droppos in [gtk.TREE_VIEW_DROP_BEFORE, gtk.TREE_VIEW_DROP_AFTER] or not isinstance(DownLoadList[relative][COL_DLOBJ], Folder):
+				parent = DownLoadList.iter_parent(relative)
+				sibling = relative
+				if droppos == gtk.TREE_VIEW_DROP_BEFORE:
+					sibling = TreeModel_iter_prev(DownLoadList, sibling)
+			else:
+				parent = relative
+				sibling = None
+			save_rows_expanded_state()
+			DownLoadList_move(subject_it, parent, sibling)
+			auto_expand_rows()
+			for it in old_parent, parent:
+				if it is not None:
+					refresh_download_state(DownLoadList[it][COL_DLOBJ])
 			success = True
 	context.finish(success, False, time)
 	return True
@@ -1806,7 +2173,7 @@ class ParamDispatcher(object):
 					if v not in [True, False, None]:
 						wget_args_all.append(v)
 			elif k == '':
-				# append custom options
+				# Append custom options.
 				for v1 in v:
 					wget_args_all.append(v1)
 			# TODO iterate through not on params but on ParamDispatchers
@@ -1950,7 +2317,7 @@ MDASH_UTF8 = '—'
 MIME_DEFAULT = 'application/octet-stream'
 CacheFolder = os.path.join(os.environ['HOME'], '.cache', 'gwget')
 COL_DLOBJ, COL_NAME, COL_FILE_ICON, COL_PXB, COL_ADDED_TSTMP, COL_ADDED_DATE, COL_PRCSTR, COL_PERCENT, COL_PULSE, COL_SPEED_BPS, COL_SPEED_STR, COL_ETA_SEC, COL_ETA_STR, COL_STATUS_ICON, COL_STATUS, COL_MESSAGE, COL_NAMEEDITABLE = range(17)
-DownLoadList = gtk.ListStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str, bool)
+DownLoadList = gtk.TreeStore(gobject.TYPE_PYOBJECT, str, str, gtk.gdk.Pixbuf, float, str, str, float, int, float, str, int, str, str, str, str, bool)
 S_QUEUE, S_INIT, S_DL, S_SAVED, S_ERR, S_STOP, S_GUILOCK = range(7)
 Status = {
 	S_QUEUE: "Queued",
@@ -1973,6 +2340,9 @@ StatusIcon = {
 # gwget cli options not requiring parameter
 ParameterlessOptions = ['--cwd-prefix', '--content-disposition']
 OSMaxFiles = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+MOUSE_BUTTON_LEFT = 1
+MOUSE_BUTTON_MIDDLE = 2
+MOUSE_BUTTON_RIGHT = 3
 
 
 # Check if application is already running
@@ -2013,6 +2383,13 @@ cmi_pause = StockMenuItem(_("Pause"), gtk.STOCK_MEDIA_PAUSE)
 cmi_clear = StockMenuItem(_("Clear"), gtk.STOCK_CLEAR)
 cmi_log = StockMenuItem(_("Show Log"), gtk.STOCK_INFO)
 cmi_props = StockMenuItem(None, gtk.STOCK_PROPERTIES)
+FolderContextMenu = gtk.Menu()
+fcmi_select = StockMenuItem(_("Select Level"), gtk.STOCK_INDENT)
+fcmi_remove = StockMenuItem(_("Delete Files"), gtk.STOCK_DELETE)
+fcmi_refetch = StockMenuItem(_("Re-download inner-least"), gtk.STOCK_REFRESH)
+fcmi_resume = StockMenuItem(_("Resume inner-least"), gtk.STOCK_MEDIA_PLAY)
+fcmi_pause = StockMenuItem(_("Pause inner-least"), gtk.STOCK_MEDIA_PAUSE)
+fcmi_clear = StockMenuItem(_("Clear inner-least"), gtk.STOCK_CLEAR)
 
 
 # Configure main window's widgets
@@ -2022,7 +2399,7 @@ win_main.set_icon_name('emblem-downloads')
 start_evt = win_main.connect('map-event', lambda w,e: (win_main.disconnect(start_evt), win_main_show()))
 win_main.connect('delete-event', lambda w,e: act_quit())
 add_key_binding(win_main, '<Control>n', lambda a,b,c,d: act_new())
-add_key_binding(win_main, '<Control>r', lambda a,b,c,d: act_start_all())
+add_key_binding(win_main, '<Control>r', lambda a,b,c,d: act_resume_all())
 add_key_binding(win_main, '<Control>k', lambda a,b,c,d: act_pause_all())
 add_key_binding(win_main, '<Control>l', lambda a,b,c,d: act_on_selection(act_show_log, 1))
 add_key_binding(win_main, '<Control>p', lambda a,b,c,d: act_on_selection(act_props, 1))
@@ -2030,106 +2407,95 @@ add_key_binding(win_main, '<Control>o', lambda a,b,c,d: act_options())
 add_key_binding(win_main, '<Control>q', lambda a,b,c,d: act_quit())
 
 toolbuttons = [
-	(None, gtk.STOCK_NEW, None, act_new),
+	(None, 
+		StockMenuToolButton(stock=gtk.STOCK_NEW,
+			menuitems=[
+				(gtk.STOCK_DIRECTORY, _("New Folder"), lambda x: act_new_folder()),
+			]),
+		None, act_new),
 	(None, None, None, 'separator'),
 	(_("Resume"), gtk.STOCK_MEDIA_PLAY, None, (act_on_selection, act_start)),
 	(_("Pause"), gtk.STOCK_MEDIA_PAUSE, None, (act_on_selection, act_pause)),
 	(_("Clear"), gtk.STOCK_CLEAR, None, (act_on_selection, act_clear_download)),
 	(None, gtk.STOCK_PROPERTIES, None, (act_on_selection, act_props)),
 	(None, None, None, 'separator'),
-	(_("Select Completed"), StockMenuToolButton(stock=gtk.STOCK_SELECT_ALL), None, act_select_completed),
+	(_("Select Completed"), 
+		StockMenuToolButton(stock=gtk.STOCK_SELECT_ALL, 
+			menuitems=[
+				(gtk.STOCK_MEDIA_PLAY, _("Resume All"), lambda x: act_resume_all()),
+				(gtk.STOCK_MEDIA_PAUSE, _("Pause All"), lambda x: act_pause_all()),
+				gtk.SeparatorMenuItem(),
+				(gtk.STOCK_ZOOM_IN, _("Expand All"), lambda x: act_expand_all()),
+				(gtk.STOCK_ZOOM_OUT, _("Collapse All"), lambda x: act_collapse_all()),
+			]),
+		None, act_select_completed),
 	(None, None, None, 'space'),
 	(None, gtk.STOCK_PREFERENCES, None, act_options),
 	(None, gtk.STOCK_QUIT, None, act_quit),
 ]
-x, x_, btn_resume, btn_pause, btn_clear, btn_props, x_, btn_all, x__, x, x \
+# TODO btn_remove
+x, x_, btn_resume, btn_pause, btn_clear, btn_props, x_, x, x__, x, x \
 = load_toolitems(main_toolbar, toolbuttons)
-
-mnu_all = gtk.Menu()
-mnu_all.append(StockMenuItem(stock_id=gtk.STOCK_MEDIA_PLAY, label=_("Resume All"), callback=lambda x: on_click_button(x, act_start_all)))
-mnu_all.append(StockMenuItem(stock_id=gtk.STOCK_MEDIA_PAUSE, label=_("Pause All"), callback=lambda x: on_click_button(x, act_pause_all)))
-mnu_all.show_all()
-btn_all.set_menu(mnu_all)
 on_selection_change(main_selection)
 
 
-tvc0 = gtk.TreeViewColumn(_("Filename"))
-tvc0.set_resizable(True)
-tvc0.set_sort_column_id(COL_NAME)
-tvc0.set_sort_indicator(True)
-cr_pix = gtk.CellRendererPixbuf()
-cr_txt = gtk.CellRendererText()
-cr_txt.connect('editing-started', treeview_column0_editing)
-cr_txt.connect('editing-canceled', treeview_column0_edit_canceled)
-cr_txt.connect('edited', treeview_column0_edited)
-tvc0.pack_start(cr_pix, False)
-tvc0.pack_start(cr_txt, True)
-tvc0.add_attribute(cr_txt, 'text', COL_NAME)
-tvc0.add_attribute(cr_txt, 'editable', COL_NAMEEDITABLE)
-tvc0.add_attribute(cr_pix, 'icon-name', COL_FILE_ICON)
-tvc0.add_attribute(cr_pix, 'pixbuf', COL_PXB)
-main_list.append_column(tvc0)
-tvc = gtk.TreeViewColumn(_("Progress"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_PERCENT)
-tvc.set_sort_indicator(True)
-cr_prc = gtk.CellRendererProgress()
-tvc.pack_start(cr_prc, True)
-tvc.add_attribute(cr_prc, 'text', COL_PRCSTR)
-tvc.add_attribute(cr_prc, 'value', COL_PERCENT)
-tvc.add_attribute(cr_prc, 'pulse', COL_PULSE)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Status"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_STATUS)
-tvc.set_sort_indicator(True)
-cr_pix = gtk.CellRendererPixbuf()
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_pix, False)
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_STATUS)
-tvc.add_attribute(cr_pix, 'icon-name', COL_STATUS_ICON)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Speed"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_SPEED_BPS)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_SPEED_STR)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Added"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_ADDED_TSTMP)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_ADDED_DATE)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("ETA"))
-tvc.set_resizable(True)
-tvc.set_sort_column_id(COL_ETA_SEC)
-tvc.set_sort_indicator(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'text', COL_ETA_STR)
-main_list.append_column(tvc)
-tvc = gtk.TreeViewColumn(_("Message"))
-tvc.set_sort_column_id(COL_MESSAGE)
-tvc.set_sort_indicator(True)
-tvc.set_resizable(True)
-cr_txt = gtk.CellRendererText()
-tvc.pack_start(cr_txt, True)
-tvc.add_attribute(cr_txt, 'markup', COL_MESSAGE)
-main_list.append_column(tvc)
+main_columns = [
+	("Filename", COL_NAME, [
+		(gtk.CellRendererPixbuf, {'icon-name': COL_FILE_ICON, 'pixbuf': COL_PXB}),
+		(gtk.CellRendererText, {'text': COL_NAME, 'editable': COL_NAMEEDITABLE}),
+	]),
+	("Progress", COL_PERCENT, [
+		(gtk.CellRendererProgress, {'text': COL_PRCSTR, 'value': COL_PERCENT, 'pulse': COL_PULSE}),
+	]),
+	("Status", COL_STATUS, [
+		(gtk.CellRendererPixbuf, {'icon-name': COL_STATUS_ICON}),
+		(gtk.CellRendererText, {'text': COL_STATUS}),
+	]),
+	("Speed", COL_SPEED_BPS, [
+		(gtk.CellRendererText, {'text': COL_SPEED_STR}),
+	]),
+	("Added", COL_ADDED_TSTMP, [
+		(gtk.CellRendererText, {'text': COL_ADDED_DATE}),
+	]),
+	("ETA", COL_ETA_SEC, [
+		(gtk.CellRendererText, {'text': COL_ETA_STR}),
+	]),
+	("Message", COL_MESSAGE, [
+		(gtk.CellRendererText, {'markup': COL_MESSAGE}),
+	]),
+]
+for col_label, sort_col_id, cellrenderers in main_columns:
+	tvc = gtk.TreeViewColumn()
+	tvc.set_resizable(True)
+	tvc.set_sort_column_id(sort_col_id)
+	tvc.set_sort_indicator(True)
+	tvclbl = gtk.Label(_(col_label))
+	tvclbl.show()
+	tvc.set_widget(tvclbl)
+	for cellr in cellrenderers:
+		cr_class, attrib = cellr[:]
+		cr = cr_class()
+		expand = bool(cr_class != gtk.CellRendererPixbuf)
+		tvc.pack_start(cr, expand)
+		for attname, attvalue in attrib.iteritems():
+			tvc.add_attribute(cr, attname, attvalue)
+	main_list.append_column(tvc)
 
-DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
+tvc0 = main_list.get_column(0)
+tvc0cr = tvc0.get_cell_renderers()
+tvc0cr[1].connect('editing-started', treeview_column0_editing)
+tvc0cr[1].connect('editing-canceled', treeview_column0_edit_canceled)
+tvc0cr[1].connect('edited', treeview_column0_edited)
+
+
 main_list.set_rules_hint(True)
+DownLoadList.set_sort_column_id(COL_ADDED_TSTMP, gtk.SORT_DESCENDING)
 main_list.set_reorderable(True)
 main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
+# TODO multi DnD
 main_list.drag_dest_set(0, [], 0)
 main_list.connect('drag-motion', DnD_motion)
 main_list.connect('drag-drop', DnD_accept)
@@ -2147,6 +2513,12 @@ cmi_pause.connect('activate', on_context_menu, act_pause)
 cmi_clear.connect('activate', on_context_menu, act_clear_download)
 cmi_log.connect('activate', on_context_menu, act_show_log)
 cmi_props.connect('activate', on_context_menu, act_props)
+fcmi_select.connect('activate', on_level_context_menu, act_select)
+fcmi_remove.connect('activate', on_level_context_menu, act_remove_download)
+fcmi_refetch.connect('activate', on_level_context_menu, act_refetch)
+fcmi_resume.connect('activate', on_level_context_menu, act_resume)
+fcmi_pause.connect('activate', on_level_context_menu, act_pause)
+fcmi_clear.connect('activate', on_level_context_menu, act_clear_download)
 
 
 # Pack main window's widgets
@@ -2171,6 +2543,14 @@ ContextMenu.append(gtk.SeparatorMenuItem())
 ContextMenu.append(cmi_log)
 ContextMenu.append(cmi_props)
 ContextMenu.show_all()
+FolderContextMenu.append(fcmi_select)
+FolderContextMenu.append(gtk.SeparatorMenuItem())
+FolderContextMenu.append(fcmi_remove)
+FolderContextMenu.append(fcmi_refetch)
+FolderContextMenu.append(fcmi_resume)
+FolderContextMenu.append(fcmi_pause)
+FolderContextMenu.append(fcmi_clear)
+FolderContextMenu.show_all()
 
 
 ## New Download window
