@@ -1476,7 +1476,7 @@ def refresh_download_state_single(dlobj):
 							row[COL_ETA_SEC] = dl_maxeta.eta
 							row[COL_ETA_STR] = dl_maxeta.eta_str
 					else:
-						row[COL_PERCENT] = -1
+						row[COL_PERCENT] = 0
 						row[COL_PRCSTR] = ''
 						row[COL_PULSE] = 0
 						row[COL_SPEED_BPS] = -1
@@ -1659,20 +1659,32 @@ def DownLoadList_add_new_folder(parent=None, after=None):
 		{COL_DLOBJ: Folder(_("Folder")), COL_FILE_ICON: gtk.STOCK_DIRECTORY, COL_NAMEEDITABLE: True},
 		parent = parent, after = after)
 
-def start_new_download(url, params, start=True):
+def get_new_item_position():
+	parent = None
+	after = None
+	itpaths = main_selection.get_selected_rows()[1]
+	if len(itpaths) > 0:
+		parent = DownLoadList.get_iter(itpaths[0])
+		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
+			after = parent
+			parent = DownLoadList.iter_parent(parent)
+	return (parent, after)
+
+def start_new_download(url, params, start=True, parent=None, after=None):
 	urlparts = urlparse.urlparse(url)
 	if urlparts.scheme == 'data':
 		dl = DataDownload(url, params)
 		start = True
 	else:
 		dl = Download(url, params)
-	it = DownLoadList_append_new({COL_DLOBJ: dl})
+	it = DownLoadList_append_new({COL_DLOBJ: dl}, parent, after)
 	refresh_download_state(dl)
 	if start:
 		dl.start()
 	return it
 
 def reset_parameters(params={}):
+	p1t1.set_text('')
 	for opt, prmdisp in ParamDispatchers.iteritems():
 		if params.has_key(opt):
 			# Fill widgets with given wget parameters.
@@ -1697,20 +1709,16 @@ def act_new():
 	reset_parameters()
 
 def act_new_folder():
-	parent = None
-	after = None
-	itpaths = main_selection.get_selected_rows()[1]
-	if len(itpaths) > 0:
-		parent = DownLoadList.get_iter(itpaths[0])
-		if not isinstance(DownLoadList[parent][COL_DLOBJ], Folder):
-			after = parent
-			parent = DownLoadList.iter_parent(parent)
-	it = DownLoadList_add_new_folder(parent=parent, after=after)
+	it = add_new_folder()
 	itpath = DownLoadList.get_path(it)
 	main_list.expand_to_path(itpath)
 	main_selection.unselect_all()
 	main_selection.select_iter(it)
 	main_list.set_cursor(itpath, focus_column=tvc0, start_editing=True)
+
+def add_new_folder():
+	parent, after = get_new_item_position()
+	return DownLoadList_add_new_folder(parent=parent, after=after)
 
 def act_select_completed():
 	main_selection.unselect_all()
@@ -2034,18 +2042,29 @@ def new_download(start=True, doOpen=False):
 		params['on_complete'] = 'mimeopen-gui {}'
 	params['runnable'] = bool(start)
 	
-	main_selection.unselect_all()
 	uniq_url = {}
 	uniq_host = {}
-	# TODO if multiple url then create new folder for them and expand the folder
-	for url in p1t1.get_text().split():
+	urls = p1t1.get_text().split()
+	if len(urls) > 1:
+		parent_it = add_new_folder()
+		after_it = None
+	else:
+		parent_it, after_it = get_new_item_position()
+	if parent_it is not None:
+		parent_itpath = DownLoadList.get_path(parent_it)
+		main_list.expand_to_path(parent_itpath)
+	main_selection.unselect_all()
+	
+	for url in urls:
 		if not uniq_url.has_key(url):
 			this_hostname = urlparse.urlparse(url).hostname
 			if start:
 				start_this = all(this_hostname != host for host in uniq_host.iterkeys())
 			else:
 				start_this = False
-			it = start_new_download(url, params, start=start_this)
+			it = start_new_download(url, params, start=start_this, parent=parent_it, after=after_it)
+			if parent_it is not None:
+				main_list.expand_row(parent_itpath, open_all=False)
 			main_selection.select_iter(it)
 			uniq_url[url] = 1
 			uniq_host[this_hostname] = 1
@@ -2164,7 +2183,7 @@ class ParamDispatcher(object):
 					if v not in [True, False, None]:
 						wget_args_all.append(v)
 			elif k == '':
-				# append custom options
+				# Append custom options.
 				for v1 in v:
 					wget_args_all.append(v1)
 			# TODO iterate through not on params but on ParamDispatchers
