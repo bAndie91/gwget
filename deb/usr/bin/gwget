@@ -1799,14 +1799,16 @@ def act_on_selection(func, maxi=None):
 			func(it, DownLoadList[it][COL_DLOBJ])
 
 def on_selection_change(selection):
-	# TODO Folders
 	iters = map(lambda p: DownLoadList.get_iter(p), selection.get_selected_rows()[1])
-	dls = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
-	num = len(iters)
-	btn_resume.set_sensitive(num>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
-	btn_pause.set_sensitive(num>0 and all(dl.running for dl in dls))
-	btn_clear.set_sensitive(num>0 and all(not dl.running for dl in dls))
-	btn_props.set_sensitive(num == 1)
+	objs = map(lambda it: DownLoadList[it][COL_DLOBJ], iters)
+	dls = filter(lambda obj: isinstance(obj, BaseDownload), objs)
+	n_objs = len(objs)
+	n_dls = len(dls)
+	# TODO resume and pause on Folders
+	btn_resume.set_sensitive(n_dls>0 and all(not dl.running and not(dl.completed and os.path.exists(dl.outfile)) for dl in dls))
+	btn_pause.set_sensitive(n_dls>0 and all(dl.running for dl in dls))
+	btn_clear.set_sensitive(n_objs>0 and all(not dl.running for dl in dls))
+	btn_props.set_sensitive(n_objs == 1 and n_dls == 1)
 
 def on_context_menu(menuitem, function):
 	it = ContextMenu.get_data('iterator')
@@ -2010,7 +2012,9 @@ def DnD_receive(wdg, context, x, y, selectiondata, info, time):
 			else:
 				parent = relative
 				sibling = None
+			save_rows_expanded_state()
 			DownLoadList_move(DownLoadList.get_iter(subject), parent, sibling)
+			auto_expand_rows()
 			success = True
 	context.finish(success, False, time)
 	return True
@@ -2382,11 +2386,11 @@ main_list.set_enable_search(True)
 main_list.set_search_column(COL_NAME)
 main_list.connect('button-press-event', on_treeview_click)
 main_list.connect('key-press-event', on_treeview_key)
+# TODO multi DnD
 main_list.drag_dest_set(0, [], 0)
 main_list.connect('drag-motion', DnD_motion)
 main_list.connect('drag-drop', DnD_accept)
 main_list.connect('drag-data-received', DnD_receive)
-# TODO multi DnD
 main_selection.set_mode(gtk.SELECTION_MULTIPLE)
 main_selection.connect('changed', on_selection_change)
 cmi_open_file.connect('activate', on_context_menu, act_open_file)
