@@ -1,0 +1,2 @@
+implement desktop notification maybe by pynotify
+is this needed?

@@ -1,0 +1,1 @@
+Use external tool (eg. `trickle`) to limit bandwidth, fallback to wget `--limit-rate` option.
