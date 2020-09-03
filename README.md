@@ -53,3 +53,6 @@
 ![](img/1.png)
 ![](img/2.png)
 ![](img/4.png)
+
+# issues
+Please submit issues via PR to some file `issue/TITLE.txt`.
