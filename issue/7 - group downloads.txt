@@ -1,5 +1,0 @@
-- [x] make the main list actually a tree
-- [x] button for new group creation
-- [x] make downloads draggable under each other
-- [x] folder's stats as a sum of its descendants
-- [x] put new downloads in a new folder

@@ -1,6 +1,0 @@
-implement macros to be used in rename fields for
-- guessed extension
-- number of download (when multiple URLs given)
-- other
-
-macro format: `{EXT}`, `{NUM}` OR `%x`, `%n`

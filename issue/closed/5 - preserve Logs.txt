@@ -1,2 +1,0 @@
-consider to preserve log files for downloads which started multiple times, therefore wget started to write multiple log files. 
-if you append several logs into one file, then `Download.watch_output` method has to parse it carefully.

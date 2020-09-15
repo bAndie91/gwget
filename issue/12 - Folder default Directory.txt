@@ -1,1 +1,0 @@
-assign default directory to gwget Folders

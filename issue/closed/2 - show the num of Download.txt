@@ -1,2 +1,0 @@
-if someone want to find its OBJ file in ~/.cache/gwget/
-my be shown in Properties panel or in Log panel

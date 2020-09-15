@@ -1,6 +1,0 @@
-implement application Options panel
-- [ ] OSD notification after this long run-time
-- [ ] ask confirmation on bulk operations above this limit
-- [ ] Open shell command
-- [ ] default parameters for New Download
-- [ ] new Folder name template

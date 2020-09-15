@@ -1,2 +1,0 @@
-you initiates a POST download in your application and want GWget to handle the stream.
-POST is not idempotent so you can not re-open the URL with GWget.
