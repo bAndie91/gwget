@@ -1,0 +1,1 @@
+Sort "do something with all downloads" toolbar buttons into a single drop-down toolbar button and rank it lower.
